@@ -12,7 +12,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signOut, signInWithEmailAndPassword, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, onSnapshot, collection, deleteDoc, query, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, deleteDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Firebase 설정
         const firebaseConfig = {
@@ -64,7 +64,13 @@
             toast: () => document.getElementById('toast-message')
         };
 
-        // --- 헬퍼 함수 ---
+        // --- 유틸리티: 깜빡임 방지 업데이트 ---
+        const updateHTML = (el, newHtml) => {
+            if (el && el.innerHTML !== newHtml) {
+                el.innerHTML = newHtml;
+            }
+        };
+
         window.showMessage = (msg) => {
             const toast = components.toast();
             if (!toast) return;
@@ -73,13 +79,14 @@
             setTimeout(() => toast.style.opacity = "0", 3000);
         };
 
+        // --- 클라우드 통신부 ---
         window.saveToCloud = async () => {
             if (!isAdmin || !currentUser) return;
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', currentMeetingId);
             try {
                 await setDoc(docRef, appData);
             } catch (e) {
-                console.error("Cloud Save Error:", e);
+                console.error("Save Error:", e);
                 window.showMessage("저장 권한이 없습니다.");
             }
         };
@@ -97,7 +104,8 @@
             };
             try {
                 await setDoc(docRef, initialData);
-            } catch (e) { console.error("Meeting Create Error:", e); }
+                window.showMessage(`${name} 모임이 생성되었습니다.`);
+            } catch (e) { console.error("Create Moim Error:", e); }
         };
 
         window.ensureYearExists = (year) => {
@@ -114,18 +122,15 @@
             }
         };
 
-        // --- 모달 시스템 ---
+        // --- 모달 제어 (리스너 꼬임 해결) ---
         window.openModal = (title, bodyHtml, onConfirm) => {
-            const modal = components.modal();
-            const modalConfirmBtn = components.modalConfirmBtn();
-            
             components.modalTitle().innerText = title;
             components.modalBody().innerHTML = bodyHtml;
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
+            components.modal().classList.replace('hidden', 'flex');
             
-            const newBtn = modalConfirmBtn.cloneNode(true);
-            modalConfirmBtn.parentNode.replaceChild(newBtn, modalConfirmBtn);
+            const confirmBtn = components.modalConfirmBtn();
+            const newBtn = confirmBtn.cloneNode(true);
+            confirmBtn.parentNode.replaceChild(newBtn, confirmBtn);
             
             newBtn.onclick = async () => { 
                 const res = await onConfirm();
@@ -134,20 +139,16 @@
         };
 
         window.closeModal = () => {
-            const modal = components.modal();
-            modal.classList.remove('flex');
-            modal.classList.add('hidden');
+            components.modal().classList.replace('flex', 'hidden');
         };
 
-        // --- 인증 및 동기화 (오류 해결 핵심) ---
+        // --- 인증 및 데이터 동기화 리스너 ---
         const initAuth = async () => {
             try {
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     try {
                         await signInWithCustomToken(auth, __initial_auth_token);
-                    } catch (e) {
-                        await signInAnonymously(auth);
-                    }
+                    } catch (e) { await signInAnonymously(auth); }
                 } else {
                     await signInAnonymously(auth);
                 }
@@ -159,7 +160,7 @@
 
         onAuthStateChanged(auth, (user) => {
             currentUser = user;
-            isAdmin = user && !user.isAnonymous; 
+            isAdmin = !!user && !user.isAnonymous; 
             updateAuthUI();
             if (user) {
                 syncMeetingList();
@@ -179,7 +180,7 @@
             } else {
                 btn.innerText = "관리자 로그인";
                 btn.classList.replace('bg-slate-700', 'bg-emerald-600');
-                if (info) info.innerText = currentUser ? "조회 전용 모드" : "인증 대기 중...";
+                if (info) info.innerText = currentUser ? "조회 전용 모드" : "인증 중...";
                 document.getElementById('title-container').classList.remove('admin-mode');
             }
             document.querySelectorAll('.admin-only').forEach(el => {
@@ -193,14 +194,11 @@
             unsubscribeList = onSnapshot(meetingsColl, (snapshot) => {
                 const newList = snapshot.docs.map(doc => doc.id).sort();
                 const select = components.meetingSelect();
-                
-                // 데이터 내용이 달라졌을 때만 리렌더링 (깜빡임 차단)
                 if (JSON.stringify(meetingList) !== JSON.stringify(newList)) {
                     meetingList = newList;
                     if (meetingList.length === 0 && isAdmin) window.createNewMeeting('황제모임');
-                    
                     const optionsHtml = meetingList.map(m => `<option value="${m}" ${m === currentMeetingId ? 'selected' : ''}>${m}</option>`).join('');
-                    if (select.innerHTML !== optionsHtml) select.innerHTML = optionsHtml;
+                    updateHTML(select, optionsHtml);
                 } else if (select && select.value !== currentMeetingId) {
                     select.value = currentMeetingId;
                 }
@@ -211,10 +209,10 @@
             if (unsubscribeData) unsubscribeData();
             currentMeetingId = meetingId;
             localStorage.setItem('last_meeting_id', meetingId);
-            
             const titleEl = components.mainTitle();
             if (titleEl) titleEl.innerText = meetingId;
-            document.getElementById('footer-meeting-name').innerText = meetingId;
+            const footerEl = document.getElementById('footer-meeting-name');
+            if (footerEl) footerEl.innerText = meetingId;
 
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', meetingId);
             unsubscribeData = onSnapshot(docRef, (snapshot) => {
@@ -230,22 +228,22 @@
             });
         };
 
-        // --- 기능 함수부 ---
+        // --- 기능 함수 정의 ---
         window.renameMeeting = () => {
             if (!isAdmin) return;
-            const bodyHtml = `<input type="text" id="rename-input" class="w-full p-4 border rounded-2xl text-black font-bold outline-none" value="${currentMeetingId}" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
+            const bodyHtml = `<input type="text" id="rename-input" class="w-full p-4 border rounded-2xl text-black font-bold outline-none shadow-sm" value="${currentMeetingId}" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
             window.openModal("모임 이름 수정", bodyHtml, async () => {
                 const newName = document.getElementById('rename-input').value.trim();
                 if (!newName || newName === currentMeetingId) return true;
-                if (meetingList.includes(newName)) return (window.showMessage("이미 존재하는 이름입니다."), false);
-                
+                if (meetingList.includes(newName)) return (window.showMessage("이미 있는 이름입니다."), false);
                 try {
                     const oldRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', currentMeetingId);
                     const newRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', newName);
                     await setDoc(newRef, appData);
                     await deleteDoc(oldRef);
+                    currentMeetingId = newName;
                     startSync(newName);
-                    window.showMessage("모임 이름이 수정되었습니다.");
+                    window.showMessage("이름이 변경되었습니다.");
                     return true;
                 } catch (e) { return false; }
             });
@@ -254,12 +252,13 @@
 
         window.addNewMeeting = () => {
             if (!isAdmin) return;
-            const bodyHtml = `<input type="text" id="new-moim-input" class="w-full p-4 border rounded-2xl text-black font-bold outline-none" placeholder="새 모임 이름" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
+            const bodyHtml = `<input type="text" id="new-moim-input" class="w-full p-4 border rounded-2xl text-black font-bold outline-none shadow-sm" placeholder="새 모임 이름" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
             window.openModal("새 모임 생성", bodyHtml, async () => {
                 const name = document.getElementById('new-moim-input').value.trim();
                 if (!name) return false;
-                if (meetingList.includes(name)) return (window.showMessage("이미 존재하는 모임입니다."), false);
+                if (meetingList.includes(name)) return (window.showMessage("이미 있는 모임입니다."), false);
                 await window.createNewMeeting(name);
+                currentMeetingId = name;
                 startSync(name);
                 return true;
             });
@@ -268,7 +267,7 @@
 
         window.addNewYear = () => {
             if (!isAdmin) return;
-            const bodyHtml = `<input type="number" id="new-year-input" class="w-full p-4 border rounded-2xl text-black font-bold text-center outline-none" placeholder="2026" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
+            const bodyHtml = `<input type="number" id="new-year-input" class="w-full p-4 border rounded-2xl text-black font-bold text-center outline-none shadow-sm" placeholder="2026" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
             window.openModal("연도 추가", bodyHtml, async () => {
                 const year = document.getElementById('new-year-input').value.trim();
                 if (year.length !== 4) return (window.showMessage("4자리 연도를 입력하세요."), false);
@@ -312,11 +311,10 @@
         }
 
         function renderHeader() {
-            components.titleYear().innerText = `${currentYear}년`;
-            const dropdown = components.yearDropdown(); if (!dropdown) return;
+            if (components.titleYear()) components.titleYear().innerText = `${currentYear}년`;
             const years = [...(appData.years || [])].sort((a,b)=>Number(b)-Number(a));
             const optHtml = years.map(y => `<option value="${y}" ${y === currentYear ? 'selected' : ''}>${y}</option>`).join('');
-            if (dropdown.innerHTML !== optHtml) dropdown.innerHTML = optHtml;
+            updateHTML(components.yearDropdown(), optHtml);
 
             const base = (appData.financeBase && appData.financeBase[currentYear]) || { carry: 0, monthlyFee: 10000, monthlyInterest: Array(12).fill(0) };
             const carryInput = components.carryInput();
@@ -342,9 +340,9 @@
             const entries = (appData.ledger && appData.ledger[currentYear]) || [];
             const events = [...new Set(entries.map(e => e.event))].filter(e => e).sort();
             const filterHtml = '<option value="all">전체 내역 보기</option>' + events.map(ev => `<option value="${ev}" ${ev === currentFilter ? 'selected' : ''}>${ev}</option>`).join('');
-            if (filterDropdown.innerHTML !== filterHtml) filterDropdown.innerHTML = filterHtml;
+            updateHTML(filterDropdown, filterHtml);
 
-            const body = components.ledgerBody(); body.innerHTML = '';
+            let bodyHtml = '';
             let bal = Number((appData.financeBase[currentYear])?.carry || 0);
             let feeSum = 0;
             (appData.members || []).forEach(m => { if (m.paidByYear && m.paidByYear[currentYear]) feeSum += m.paidByYear[currentYear].filter(p => p).length * Number(appData.financeBase[currentYear]?.monthlyFee || 10000); });
@@ -353,63 +351,65 @@
             [...entries].sort((a,b)=>(a.date||"").localeCompare(b.date||"")).forEach((r, idx) => {
                 bal += (r.type === 'income' ? r.amount : -r.amount);
                 if (currentFilter !== 'all' && r.event !== currentFilter) return;
-                const tr = document.createElement('tr'); tr.className = "text-xs border-b bg-white transition-colors hover:bg-slate-50";
-                tr.innerHTML = `
-                    <td class="p-0 border-r-2 border-slate-200 sticky-col bg-inherit"><input value="${r.event}" class="w-full h-11 text-center font-bold outline-none bg-transparent" onchange="window.updateLedgerItem(${idx}, 'event', this.value)" ${!isAdmin?'disabled':''}></td>
-                    <td class="p-0 border-r"><input value="${r.date}" class="w-full h-11 text-center font-mono outline-none bg-transparent" placeholder="YY.MM.DD" oninput="window.formatDateInput(this)" onchange="window.updateLedgerItem(${idx}, 'date', this.value)" ${!isAdmin?'disabled':''}></td>
-                    <td class="p-0 border-r"><input value="${r.desc}" class="w-full h-11 px-4 text-left outline-none bg-transparent" onchange="window.updateLedgerItem(${idx}, 'desc', this.value)" ${!isAdmin?'disabled':''}></td>
-                    <td class="p-0 border-r"><input type="number" value="${r.type==='income'?r.amount:''}" class="w-full h-11 px-3 text-right font-black outline-none bg-transparent" onchange="window.updateLedgerAmount(${idx}, 'income', this.value)" ${!isAdmin?'disabled':''}></td>
-                    <td class="p-0 border-r"><input type="number" value="${r.type==='expense'?r.amount:''}" class="w-full h-11 px-3 text-right font-black outline-none bg-transparent" onchange="window.updateLedgerAmount(${idx}, 'expense', this.value)" ${!isAdmin?'disabled':''}></td>
-                    <td class="p-3 text-right font-black bg-black/5 text-slate-800">${bal.toLocaleString()}</td>
-                    <td class="p-3 border-r text-center">${r.image ? `<i class="fa-solid fa-image text-emerald-500 cursor-pointer" onclick="window.openImageViewer('${r.image}')"></i>` : '-'}</td>
-                    <td class="p-0 border-r"><input value="${r.note || ''}" class="w-full h-11 px-3 text-center italic outline-none bg-transparent" onchange="window.updateLedgerItem(${idx}, 'note', this.value)" ${!isAdmin?'disabled':''}></td>
-                    <td class="p-3 w-10 text-center">${isAdmin ? `<button onclick="window.deleteLedger(${idx})" class="text-slate-300 hover:text-red-500 transition-colors"><i class="fa-solid fa-trash-can"></i></button>` : ''}</td>
+                bodyHtml += `
+                    <tr class="text-xs border-b bg-white transition-colors hover:bg-slate-50">
+                        <td class="p-0 border-r-2 border-slate-200 sticky-col bg-inherit"><input value="${r.event}" class="w-full h-11 text-center font-bold outline-none bg-transparent" onchange="window.updateLedgerItem(${idx}, 'event', this.value)" ${!isAdmin?'disabled':''}></td>
+                        <td class="p-0 border-r"><input value="${r.date}" class="w-full h-11 text-center font-mono outline-none bg-transparent" placeholder="YY.MM.DD" oninput="window.formatDateInput(this)" onchange="window.updateLedgerItem(${idx}, 'date', this.value)" ${!isAdmin?'disabled':''}></td>
+                        <td class="p-0 border-r"><input value="${r.desc}" class="w-full h-11 px-4 text-left outline-none bg-transparent" onchange="window.updateLedgerItem(${idx}, 'desc', this.value)" ${!isAdmin?'disabled':''}></td>
+                        <td class="p-0 border-r"><input type="number" value="${r.type==='income'?r.amount:''}" class="w-full h-11 px-3 text-right font-black outline-none bg-transparent" onchange="window.updateLedgerAmount(${idx}, 'income', this.value)" ${!isAdmin?'disabled':''}></td>
+                        <td class="p-0 border-r"><input type="number" value="${r.type==='expense'?r.amount:''}" class="w-full h-11 px-3 text-right font-black outline-none bg-transparent" onchange="window.updateLedgerAmount(${idx}, 'expense', this.value)" ${!isAdmin?'disabled':''}></td>
+                        <td class="p-3 text-right font-black bg-black/5 text-slate-800">${bal.toLocaleString()}</td>
+                        <td class="p-3 border-r text-center">${r.image ? `<i class="fa-solid fa-image text-emerald-500 cursor-pointer" onclick="window.openImageViewer('${r.image}')"></i>` : '-'}</td>
+                        <td class="p-0 border-r"><input value="${r.note || ''}" class="w-full h-11 px-3 text-center italic outline-none bg-transparent" onchange="window.updateLedgerItem(${idx}, 'note', this.value)" ${!isAdmin?'disabled':''}></td>
+                        <td class="p-3 w-10 text-center">${isAdmin ? `<button onclick="window.deleteLedger(${idx})" class="text-slate-300 hover:text-red-500 transition-colors"><i class="fa-solid fa-trash-can"></i></button>` : ''}</td>
+                    </tr>
                 `;
-                body.appendChild(tr);
             });
+            updateHTML(components.ledgerBody(), bodyHtml);
         }
 
         function renderIntegratedMemberSettle() {
             const mBody = components.memberBody(); const sHead = components.settleHeader(); const sBody = components.settleBody();
             if(!mBody || !sHead || !sBody) return;
             appData.members.sort((a,b)=>a.name.localeCompare(b.name, 'ko'));
-            mBody.innerHTML = '';
+            
             const base = (appData.financeBase && appData.financeBase[currentYear]) || { monthlyFee: 10000, monthlyInterest: Array(12).fill(0) };
             const baseInput = document.getElementById('base-fee-input');
             if(baseInput) baseInput.value = base.monthlyFee || 10000;
             
-            let intTr = document.createElement('tr'); intTr.className = "bg-emerald-50/50 text-[11px]";
-            let intHtml = `<td class="p-3 font-black sticky left-0 z-10 border-r-2 border-emerald-200 bg-emerald-50 text-center text-black">월별 이자(+)</td>`;
-            for(let i=0; i<12; i++) { intHtml += `<td class="p-1 border-r border-emerald-100 text-center"><input type="number" value="${base.monthlyInterest ? base.monthlyInterest[i] : 0}" class="w-full text-center bg-transparent outline-none font-bold" onchange="window.updateInterest(${i}, this.value)" ${!isAdmin?'disabled':''}></td>`; }
-            intHtml += `<td class="bg-emerald-50/20 border-l border-emerald-100"></td>`;
-            intTr.innerHTML = intHtml; mBody.appendChild(intTr);
+            let mHtml = `<tr class="bg-emerald-50/50 text-[11px]"><td class="p-3 font-black sticky left-0 z-10 border-r-2 border-emerald-200 bg-emerald-50 text-center text-black">월별 이자(+)</td>`;
+            for(let i=0; i<12; i++) { mHtml += `<td class="p-1 border-r border-emerald-100 text-center"><input type="number" value="${base.monthlyInterest ? base.monthlyInterest[i] : 0}" class="w-full text-center bg-transparent outline-none font-bold" onchange="window.updateInterest(${i}, this.value)" ${!isAdmin?'disabled':''}></td>`; }
+            mHtml += `<td class="bg-emerald-50/20 border-l border-emerald-100"></td></tr>`;
 
             (appData.members || []).forEach(m => {
                 const paid = (m.paidByYear && m.paidByYear[currentYear]) || Array(12).fill(false);
-                const tr = document.createElement('tr'); tr.className = `border-b text-xs bg-white ${m.isInactive?'opacity-40 grayscale line-through pointer-events-none':''}`;
-                let html = `<td class="p-2 sticky left-0 z-10 border-r-2 border-slate-200 bg-inherit min-w-[250px] whitespace-nowrap text-black"><div class="flex items-center gap-2"><span class="font-black text-[15px] text-black">${m.name}</span>${isAdmin ? `<button onclick="window.removeMember(${m.id})" class="text-slate-300 hover:text-red-500"><i class="fa-solid ${m.isInactive ? 'fa-rotate-left' : 'fa-trash-can'} text-[11px]"></i></button>` : ''}</div></td>`;
-                paid.forEach((p, i) => { html += `<td class="p-1 border-r text-center"><div onclick="window.toggleMemberPaid(${m.id}, ${i})" class="w-8 h-8 mx-auto flex items-center justify-center rounded-lg cursor-pointer ${p ? 'bg-emerald-600 text-white shadow-sm' : 'border border-slate-200 hover:border-emerald-300'}"><i class="fa-solid fa-check text-[10px]"></i></div></td>`; });
-                html += `<td class="p-1 border-r min-w-[150px]"><input value="${(m.memoByYear && m.memoByYear[currentYear]) || ''}" class="w-full h-8 px-2 outline-none font-medium bg-transparent text-black" onchange="window.updateMemberMemo(${m.id}, this.value)" ${!isAdmin?'disabled':''}></td>`;
-                tr.innerHTML = html; mBody.appendChild(tr);
+                mHtml += `<tr class="border-b text-xs bg-white ${m.isInactive?'opacity-40 grayscale line-through pointer-events-none':''}">`;
+                mHtml += `<td class="p-2 sticky left-0 z-10 border-r-2 border-slate-200 bg-inherit min-w-[250px] whitespace-nowrap text-black font-bold"><div class="flex items-center gap-2"><span>${m.name}</span>${isAdmin ? `<button onclick="window.removeMember(${m.id})" class="text-slate-300 hover:text-red-500"><i class="fa-solid ${m.isInactive ? 'fa-rotate-left' : 'fa-trash-can'} text-[11px]"></i></button>` : ''}</div></td>`;
+                paid.forEach((p, i) => { mHtml += `<td class="p-1 border-r text-center"><div onclick="window.toggleMemberPaid(${m.id}, ${i})" class="w-8 h-8 mx-auto flex items-center justify-center rounded-lg cursor-pointer ${p ? 'bg-emerald-600 text-white shadow-sm' : 'border border-slate-200 hover:border-emerald-300'}"><i class="fa-solid fa-check text-[10px]"></i></div></td>`; });
+                mHtml += `<td class="p-1 border-r min-w-[150px]"><input value="${(m.memoByYear && m.memoByYear[currentYear]) || ''}" class="w-full h-8 px-2 outline-none font-medium bg-transparent text-black" onchange="window.updateMemberMemo(${m.id}, this.value)" ${!isAdmin?'disabled':''}></td></tr>`;
             });
+            updateHTML(mBody, mHtml);
 
             const allYears = [...(appData.years || [])].sort((a,b)=>Number(a)-Number(b));
-            sHead.innerHTML = `<tr><th class="p-4 sticky left-0 z-20 bg-gray-100 border-r-2 border-slate-300 font-black text-black text-xs">성명</th>` + allYears.map(y => `<th class="p-3 border-r font-black text-slate-500 text-[11px]">${y}년</th>`).join('') + `<th class="p-4 bg-emerald-700 text-white font-black text-xs">누적 합계</th></tr>`;
-            sBody.innerHTML = '';
+            let sHeadHtml = `<tr><th class="p-4 sticky left-0 z-20 bg-gray-100 border-r-2 border-slate-300 font-black text-black text-xs text-center">성명</th>` + allYears.map(y => `<th class="p-3 border-r font-black text-slate-500 text-[11px]">${y}년</th>`).join('') + `<th class="p-4 bg-emerald-700 text-white font-black text-xs">누적 합계</th></tr>`;
+            updateHTML(sHead, sHeadHtml);
+
+            let sBodyHtml = '';
             (appData.members || []).forEach(m => {
                 let total = 0;
-                let trHtml = `<td class="p-4 sticky left-0 z-10 font-bold border-r-2 bg-white text-center text-black">${m.name}</td>`;
+                sBodyHtml += `<tr class="border-b hover:bg-slate-50 transition-colors text-black text-center">`;
+                sBodyHtml += `<td class="p-4 sticky left-0 z-10 font-bold border-r-2 bg-white text-black">${m.name}</td>`;
                 allYears.forEach(y => {
                     const fee = (appData.financeBase && appData.financeBase[y] && appData.financeBase[y].monthlyFee) || 10000; 
                     const amt = (m.paidByYear && m.paidByYear[y] ? m.paidByYear[y].filter(p => p).length : 0) * fee; total += amt;
-                    trHtml += `<td class="p-3 border-r text-center font-bold text-xs text-slate-700">${amt.toLocaleString()}</td>`;
+                    sBodyHtml += `<td class="p-3 border-r font-bold text-xs text-slate-700">${amt.toLocaleString()}</td>`;
                 });
-                trHtml += `<td class="p-4 bg-emerald-50 font-black text-emerald-900 text-center text-xs">${total.toLocaleString()}원</td>`;
-                const tr = document.createElement('tr'); tr.className = "border-b hover:bg-slate-50 transition-colors text-black"; tr.innerHTML = trHtml; sBody.appendChild(tr);
+                sBodyHtml += `<td class="p-4 bg-emerald-50 font-black text-emerald-900 text-xs">${total.toLocaleString()}원</td></tr>`;
             });
+            updateHTML(sBody, sBodyHtml);
         }
 
-        // --- 기능 제어 함수들 ---
+        // --- 기능 작동 함수 ---
         window.updateMonthlyFee = (v) => { if(!isAdmin) return; if(!appData.financeBase[currentYear]) appData.financeBase[currentYear] = {}; appData.financeBase[currentYear].monthlyFee = Number(v) || 0; window.saveToCloud(); };
         window.updateCarryOver = (v) => { if(!isAdmin) return; if(!appData.financeBase[currentYear]) appData.financeBase[currentYear] = {}; appData.financeBase[currentYear].carry = Number(v) || 0; window.saveToCloud(); };
         window.updateInterest = (idx, v) => { if(!isAdmin) return; if(!appData.financeBase[currentYear]) appData.financeBase[currentYear] = {}; if(!appData.financeBase[currentYear].monthlyInterest) appData.financeBase[currentYear].monthlyInterest = Array(12).fill(0); appData.financeBase[currentYear].monthlyInterest[idx] = Number(v) || 0; window.saveToCloud(); };
@@ -420,7 +420,7 @@
         window.updateLedgerAmount = (idx, t, v) => { if(!isAdmin) return; appData.ledger[currentYear][idx].type = t; appData.ledger[currentYear][idx].amount = Number(v) || 0; window.saveToCloud(); };
         window.deleteLedger = (idx) => { if(!isAdmin) return; appData.ledger[currentYear].splice(idx, 1); window.saveToCloud(); };
         window.formatDateInput = (el) => { el.value = el.value.replace(/[^0-9.]/g, ''); };
-        window.switchView = (id) => { document.querySelectorAll('main > div').forEach(d => d.classList.add('hidden')); document.getElementById(`view-${id}`)?.classList.remove('hidden'); document.querySelectorAll('nav button').forEach(b => b.classList.remove('active', 'text-emerald-700', 'border-emerald-700', 'bg-emerald-50')); document.getElementById(`tab-${id}`)?.classList.add('active', 'text-emerald-700', 'border-emerald-700', 'bg-emerald-50'); };
+        window.switchView = (id) => { document.querySelectorAll('main > div').forEach(d => d.classList.add('hidden')); document.getElementById(`view-${id}`)?.classList.remove('hidden'); document.querySelectorAll('nav button').forEach(b => b.classList.remove('active')); document.getElementById(`tab-${id}`)?.classList.add('active'); };
         window.openImageViewer = (src) => { components.viewerImg().src = src; document.getElementById('image-viewer').classList.replace('hidden', 'flex'); };
         
         window.handleAuth = async () => { 
@@ -452,6 +452,7 @@
         .admin-only { display: none; }
         #carry-over-input { color: white !important; transition: all 0.2s; }
         #carry-over-input:focus { color: black !important; background-color: white !important; }
+        input::placeholder { color: #94a3b8 !important; }
         .admin-mode h1 { cursor: pointer; }
         .admin-mode h1:hover { color: #10b981; }
         .edit-icon { font-size: 0.5em; margin-left: 10px; color: #10b981; display: none; cursor: pointer; opacity: 0.6; }
@@ -459,17 +460,16 @@
     </style>
 </head>
 <body class="min-h-screen text-black overflow-x-hidden">
+    <div id="datalist-container"></div>
     <div id="toast-message" class="fixed top-5 left-1/2 -translate-x-1/2 z-[100] bg-slate-800 text-white px-6 py-3 rounded-full text-sm font-bold shadow-2xl opacity-0 transition-opacity duration-300 pointer-events-none text-center"></div>
 
-    <!-- 이미지 뷰어 -->
     <div id="image-viewer" class="fixed inset-0 bg-black/90 z-[110] hidden items-center justify-center p-4 cursor-pointer" onclick="this.classList.replace('flex','hidden')">
         <img id="viewer-img" src="" class="max-w-full max-h-full rounded-lg shadow-2xl object-contain">
     </div>
 
-    <!-- 공통 모달 -->
     <div id="custom-modal" class="fixed inset-0 bg-black/60 z-[90] hidden items-center justify-center p-4">
-        <div class="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-300">
-            <div class="p-6 text-black text-center"><h3 id="modal-title" class="text-lg font-black mb-4 border-b pb-2">알림</h3><div id="modal-body"></div></div>
+        <div class="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-300 text-black">
+            <div class="p-6 text-black text-center"><h3 id="modal-title" class="text-lg font-black mb-4 border-b pb-2 text-black">알림</h3><div id="modal-body" class="text-black"></div></div>
             <div class="flex border-t"><button onclick="window.closeModal()" class="flex-1 py-4 text-sm font-bold text-slate-400 hover:bg-slate-50 transition-colors">취소</button><button id="modal-confirm-btn" class="flex-1 py-4 text-sm font-black text-emerald-600 border-l hover:bg-emerald-50 transition-colors">확인</button></div>
         </div>
     </div>
@@ -494,10 +494,10 @@
         </div>
 
         <header class="bg-gradient-to-br from-emerald-900 to-slate-900 text-white p-8 relative overflow-hidden">
-            <div id="title-container" class="flex justify-between items-end mb-8 relative z-10 text-white">
+            <div id="title-container" class="flex justify-between items-end mb-8 relative z-10">
                 <div class="flex items-center text-white">
-                    <h1 id="main-title" onclick="window.renameMeeting()" class="text-3xl font-black tracking-tighter transition-colors">로딩 중...</h1>
-                    <i class="fa-solid fa-pen edit-icon" onclick="window.renameMeeting()"></i>
+                    <h1 id="main-title" onclick="window.renameMeeting()" class="text-3xl font-black tracking-tighter transition-colors">황제모임</h1>
+                    <i class="fa-solid fa-pen-to-square edit-icon" onclick="window.renameMeeting()"></i>
                     <span id="title-year" class="text-emerald-500 font-medium text-lg ml-3 text-emerald-400"></span>
                 </div>
                 <div id="user-info" class="text-[10px] font-black uppercase text-slate-500 text-right tracking-widest text-white/50"></div>
@@ -510,7 +510,7 @@
                 <div class="bg-white/5 p-4 rounded-2xl border border-white/10 backdrop-blur-md"><p class="text-[10px] text-emerald-400 font-black mb-1 opacity-80 uppercase tracking-widest text-emerald-400">회비 합계</p><h3 id="fee-total-display" class="text-lg font-black text-white">0원</h3></div>
                 <div class="bg-white/5 p-4 rounded-2xl border border-white/10 backdrop-blur-md"><p class="text-[10px] text-emerald-400 font-black mb-1 opacity-80 uppercase tracking-widest text-emerald-400">이자 합계</p><h3 id="interest-total-display" class="text-lg font-black text-white">0원</h3></div>
             </div>
-            <div class="bg-emerald-500 p-5 rounded-2xl shadow-2xl border border-emerald-400/30 relative z-10 text-white"><div class="flex justify-between items-center text-white"><p class="text-[11px] text-emerald-950 font-black italic uppercase tracking-widest">현재 총 잔액</p><h3 id="final-balance" class="text-3xl font-black text-white tracking-tighter">0원</h3></div></div>
+            <div class="bg-emerald-500 p-5 rounded-2xl shadow-2xl border border-emerald-400/30 relative z-10 text-white"><div class="flex justify-between items-center text-white text-white font-black uppercase tracking-widest"><p class="text-[11px] text-emerald-950 font-black italic uppercase tracking-widest">현재 총 잔액</p><h3 id="final-balance" class="text-3xl font-black text-white tracking-tighter">0원</h3></div></div>
         </header>
 
         <nav class="flex items-center border-b sticky top-0 bg-white/90 backdrop-blur-lg z-20 shadow-sm text-black">
@@ -519,16 +519,15 @@
         </nav>
 
         <main class="p-6 flex-1 bg-slate-50/30 text-black">
-            <!-- 가계부 뷰 -->
             <div id="view-ledger" class="space-y-4">
-                <div class="flex items-center justify-between text-black">
+                <div class="flex items-center justify-between">
                     <select id="event-filter" onchange="window.renderLedger()" class="bg-white border border-slate-200 rounded-full px-4 py-2 text-xs font-bold text-black min-w-[120px] shadow-sm outline-none cursor-pointer text-black"></select>
                     <div id="filter-summary"></div>
                 </div>
                 <div class="overflow-x-auto rounded-3xl border border-slate-200 bg-white shadow-xl">
-                    <table class="w-full text-center border-collapse text-black">
+                    <table class="w-full text-center border-collapse">
                         <thead class="bg-slate-50 text-slate-400 text-[10px] font-black uppercase border-b border-slate-200">
-                            <tr><th class="p-4 sticky-col bg-slate-50 border-r-2 border-slate-200 text-slate-500">행사명</th><th class="p-4 border-r border-slate-100 text-slate-500">날짜</th><th class="p-4 border-r border-slate-100 text-slate-500">상세내역</th><th class="p-4 border-r border-slate-100 text-slate-500">입금</th><th class="p-4 border-r border-slate-100 text-slate-500">지출</th><th class="p-4 bg-black/5 border-r border-slate-200 text-black font-black">잔액</th><th class="p-4 border-r border-slate-100 text-slate-500">영수증</th><th class="p-4 border-r border-slate-100 text-slate-500">비고</th><th class="p-4 admin-only"></th></tr>
+                            <tr><th class="p-4 sticky-col bg-slate-50 border-r-2 border-slate-200 text-slate-500">행사명</th><th class="p-4 border-r border-slate-100 text-slate-500">날짜</th><th class="p-4 border-r border-slate-100 text-slate-500">상세내역</th><th class="p-4 border-r border-slate-100 text-slate-500">입금</th><th class="p-4 border-r border-slate-100 text-slate-500">지출</th><th class="p-4 bg-black/5 border-r border-slate-200 text-black font-black text-slate-900">잔액</th><th class="p-4 border-r border-slate-100 text-slate-500">영수증</th><th class="p-4 border-r border-slate-100 text-slate-500">비고</th><th class="p-4 admin-only"></th></tr>
                         </thead>
                         <tbody id="ledger-body"></tbody>
                     </table>
@@ -536,9 +535,8 @@
                 <button onclick="window.addLedgerRow()" class="w-full py-6 border-2 border-dashed border-slate-200 text-slate-400 font-black rounded-3xl hover:bg-white admin-only flex-only items-center justify-center group shadow-sm"><i class="fa-solid fa-circle-plus mr-2 text-lg group-hover:scale-110 transition-transform"></i>거래 내역 추가</button>
             </div>
             
-            <!-- 회원 명부 뷰 -->
             <div id="view-member" class="hidden space-y-10">
-                <section class="space-y-4 text-black">
+                <section class="space-y-4">
                     <div class="flex items-center justify-between text-black">
                         <h2 class="text-xl font-black text-slate-800 tracking-tight text-black">회원 명부 및 월납 현황</h2>
                         <div class="admin-only flex gap-2 items-center text-black">
@@ -550,7 +548,7 @@
                     </div>
                     <div class="overflow-x-auto rounded-3xl border border-slate-200 bg-white shadow-2xl">
                         <table class="w-full text-center border-collapse text-black">
-                            <thead class="bg-slate-100 text-[10px] text-slate-500 font-black border-b border-slate-200">
+                            <thead class="bg-slate-100 text-[10px] text-slate-500 font-black border-b border-slate-200 text-black">
                                 <tr><th class="p-4 sticky left-0 z-20 bg-slate-100 border-r-2 border-slate-200 min-w-[250px] text-black font-black">회원 정보</th><th class="p-2 border-r border-slate-100 text-black">1</th><th class="p-2 border-r border-slate-100 text-black">2</th><th class="p-2 border-r border-slate-100 text-black">3</th><th class="p-2 border-r border-slate-100 text-black">4</th><th class="p-2 border-r border-slate-100 text-black">5</th><th class="p-2 border-r border-slate-100 text-black">6</th><th class="p-2 border-r border-slate-100 text-black">7</th><th class="p-2 border-r border-slate-100 text-black">8</th><th class="p-2 border-r border-slate-100 text-black">9</th><th class="p-2 border-r border-slate-100 text-black">10</th><th class="p-2 border-r border-slate-100 text-black">11</th><th class="p-2 border-r border-slate-100 text-black">12</th><th class="p-4 min-w-[150px] text-black border-l border-slate-200 font-black">비고</th></tr>
                             </thead>
                             <tbody id="member-body"></tbody>
@@ -558,11 +556,11 @@
                     </div>
                 </section>
                 <section class="space-y-4">
-                    <h2 class="text-xl font-black text-slate-800 tracking-tight text-black">년도별 회비 정산 요약</h2>
+                    <h2 class="text-xl font-black text-slate-800 tracking-tight text-black text-black">년도별 회비 정산 요약</h2>
                     <div class="overflow-x-auto rounded-3xl border border-slate-200 bg-white shadow-2xl text-slate-900">
-                        <table class="w-full text-center border-collapse text-black">
+                        <table class="w-full text-center border-collapse text-black text-black">
                             <thead id="settle-header-row" class="bg-slate-100 font-black text-slate-500 border-b-2 border-slate-200 text-black text-xs"></thead>
-                            <tbody id="settle-body"></tbody>
+                            <tbody id="settle-body" class="text-black"></tbody>
                         </table>
                     </div>
                 </section>
