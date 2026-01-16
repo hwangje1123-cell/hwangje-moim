@@ -14,7 +14,7 @@
         import { getAuth, signInAnonymously, onAuthStateChanged, signOut, signInWithEmailAndPassword, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot, collection, deleteDoc, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Firebase 설정 (사용자 프로젝트 정보)
+        // Firebase 설정
         const firebaseConfig = {
             apiKey: "AIzaSyABPfmRxiNzND5O8KdgP7QtHdQ0Mf74nMc",
             authDomain: "hwangje-moim.firebaseapp.com",
@@ -30,7 +30,7 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        // 앱 상태 관리 변수
+        // 상태 관리
         const urlParams = new URLSearchParams(window.location.search);
         let currentMeetingId = urlParams.get('m') || localStorage.getItem('last_meeting_id') || '기본모임';
         let currentYear = urlParams.get('y'); 
@@ -69,7 +69,7 @@
             viewerImg: () => document.getElementById('viewer-img')
         };
 
-        // --- 유틸리티 및 클라우드 통신 ---
+        // --- 클라우드 통신 ---
         window.saveToCloud = async () => {
             if (!isAdmin || !currentUser) return;
             if (document.activeElement && document.activeElement.id) focusTargetId = document.activeElement.id;
@@ -126,9 +126,7 @@
                 } else {
                     await signInAnonymously(auth);
                 }
-            } catch (error) { 
-                console.error("Auth Error:", error); 
-            }
+            } catch (error) { console.error("Auth Error:", error); }
         };
 
         onAuthStateChanged(auth, (user) => {
@@ -151,7 +149,7 @@
                 btn.innerText = "로그아웃";
                 btn.classList.replace('bg-emerald-600', 'bg-slate-700');
                 if (info) info.innerText = `관리자: ${currentUser.email}`;
-                if (titleEl) titleEl.classList.add('admin-title-active'); // 관리자일 때만 호버 효과
+                if (titleEl) titleEl.classList.add('admin-title-active');
             } else {
                 btn.innerText = "관리자 로그인";
                 btn.classList.replace('bg-slate-700', 'bg-emerald-600');
@@ -160,18 +158,15 @@
             }
             
             document.querySelectorAll('.admin-only').forEach(el => {
-                const isFlex = el.classList.contains('flex-only');
-                el.style.display = isAdmin ? (isFlex ? 'flex' : 'block') : 'none';
+                el.style.display = isAdmin ? (el.classList.contains('flex-only') ? 'flex' : 'block') : 'none';
             });
             
             document.querySelectorAll('input').forEach(input => {
-                if(input.id !== 'login-email' && input.id !== 'login-pw') {
-                    input.disabled = !isAdmin;
-                }
+                if(input.id !== 'login-email' && input.id !== 'login-pw') input.disabled = !isAdmin;
             });
         }
 
-        // --- 데이터 동기화 (깜빡임 방지 로직) ---
+        // --- 데이터 동기화 (깜빡임 해결 핵심 로직) ---
         const syncMeetingList = () => {
             if (!currentUser) return;
             const meetingsColl = collection(db, 'artifacts', appId, 'public', 'data', 'meetings');
@@ -180,11 +175,14 @@
                 const newList = snapshot.docs.map(doc => doc.id).sort();
                 const select = components.meetingSelect();
                 
-                // 리스트나 선택값이 바뀌었을 때만 갱신 (깜빡임 차단)
-                if (JSON.stringify(meetingList) !== JSON.stringify(newList) || (select && select.value !== currentMeetingId)) {
+                // [깜빡임 방지 1] 리스트 구성이 변했을 때만 HTML 갱신
+                if (JSON.stringify(meetingList) !== JSON.stringify(newList)) {
                     meetingList = newList;
                     if (meetingList.length === 0 && isAdmin) window.createNewMeeting('기본모임');
                     renderMeetingSelect();
+                } else if (select && select.value !== currentMeetingId) {
+                    // [깜빡임 방지 2] 리스트는 같은데 선택된 값만 다를 경우 HTML은 건드리지 않고 value만 변경
+                    select.value = currentMeetingId;
                 }
             });
         };
@@ -192,6 +190,7 @@
         function renderMeetingSelect() {
             const select = components.meetingSelect();
             if (!select) return;
+            // 렌더링 시 현재 선택된 값을 유지하며 생성
             const newOptionsHtml = meetingList.map(m => 
                 `<option value="${m}" ${m === currentMeetingId ? 'selected' : ''}>${m}</option>`
             ).join('');
@@ -203,7 +202,9 @@
             if (unsubscribeData) unsubscribeData();
             localStorage.setItem('last_meeting_id', meetingId);
             currentMeetingId = meetingId;
-            components.mainTitle().innerText = meetingId;
+            
+            const titleEl = components.mainTitle();
+            if (titleEl && titleEl.innerText !== meetingId) titleEl.innerText = meetingId;
             if (components.footerMeeting()) components.footerMeeting().innerText = meetingId;
 
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', meetingId);
@@ -227,14 +228,14 @@
             });
         };
 
-        // --- 모임 관리 기능 (복구) ---
+        // --- 모임 관리 기능 ---
         window.addNewMeeting = () => {
             if (!isAdmin) return;
             const bodyHtml = `<input type="text" id="new-meeting-input" class="w-full p-4 border rounded-2xl outline-none focus:ring-2 ring-emerald-500 font-bold text-black" placeholder="새 모임 이름 입력" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
             window.openModal("새 모임 생성", bodyHtml, () => {
                 const name = document.getElementById('new-meeting-input').value.trim();
                 if (!name || meetingList.includes(name)) {
-                    window.showMessage("이미 존재하는 이름이거나 잘못된 이름입니다.");
+                    window.showMessage("사용할 수 없는 이름이거나 이미 존재합니다.");
                     return false;
                 }
                 window.createNewMeeting(name);
@@ -282,7 +283,7 @@
             window.showMessage(`모임 전체 공유 링크가 복사되었습니다.`);
         };
 
-        // --- 데이터 입력 및 렌더링 ---
+        // --- 렌더링 엔진 ---
         function renderAll() {
             renderHeader();
             renderLedger();
@@ -290,16 +291,14 @@
         }
 
         function renderHeader() {
-            components.titleYear().innerText = `${currentYear}년`;
+            if (components.titleYear()) components.titleYear().innerText = `${currentYear}년`;
             const dropdown = components.yearDropdown(); if (!dropdown) return;
             const years = [...(appData.years || [])].sort((a,b)=>b-a);
             const newYearOptions = years.map(y => `<option value="${y}" ${y === currentYear ? 'selected' : ''}>${y}</option>`).join('');
             if (dropdown.innerHTML !== newYearOptions) dropdown.innerHTML = newYearOptions;
 
             const base = appData.financeBase[currentYear] || { carry: 0, monthlyFee: 10000, monthlyInterest: Array(12).fill(0) };
-            if (document.activeElement !== components.carryInput()) {
-                components.carryInput().value = base.carry || 0;
-            }
+            if (document.activeElement !== components.carryInput()) components.carryInput().value = base.carry || 0;
             
             const interestSum = (base.monthlyInterest || []).reduce((a, b) => a + b, 0);
             components.interestDisplay().innerText = interestSum.toLocaleString() + "원";
@@ -386,7 +385,7 @@
             });
         }
 
-        // --- 기타 로직 ---
+        // --- 로직 핸들러 ---
         window.updateMonthlyFee = (v) => { if(!isAdmin) return; appData.financeBase[currentYear].monthlyFee = Number(v) || 0; window.saveToCloud(); };
         window.updateCarryOver = (v) => { if(!isAdmin) return; appData.financeBase[currentYear].carry = Number(v) || 0; window.saveToCloud(); };
         window.updateInterest = (idx, v) => { if(!isAdmin) return; appData.financeBase[currentYear].monthlyInterest[idx] = Number(v) || 0; window.saveToCloud(); };
@@ -397,7 +396,7 @@
         window.updateLedgerAmount = (idx, t, v) => { if(!isAdmin) return; appData.ledger[currentYear][idx].type = t; appData.ledger[currentYear][idx].amount = Number(v) || 0; window.saveToCloud(); };
         window.addLedgerRow = () => { if(!isAdmin) return; appData.ledger[currentYear].push({ event: "", date: "", desc: "", type: "expense", amount: 0, note: "", image: "" }); window.saveToCloud(); };
         window.deleteLedger = (idx) => { if(!isAdmin) return; appData.ledger[currentYear].splice(idx, 1); window.saveToCloud(); };
-        window.formatDateInput = (el) => { let v = el.value.replace(/[^0-9.]/g, ''); el.value = v; };
+        window.formatDateInput = (el) => { el.value = el.value.replace(/[^0-9.]/g, ''); };
         window.switchView = (id) => { document.querySelectorAll('main > div').forEach(d => d.classList.add('hidden')); document.getElementById(`view-${id}`)?.classList.remove('hidden'); document.querySelectorAll('nav button').forEach(b => b.classList.remove('active', 'text-emerald-700', 'border-emerald-700', 'bg-emerald-50')); document.getElementById(`tab-${id}`)?.classList.add('active', 'text-emerald-700', 'border-emerald-700', 'bg-emerald-50'); };
         window.openImageViewer = (src) => { components.viewerImg().src = src; components.imageViewer().classList.remove('hidden'); components.imageViewer().classList.add('flex'); };
         window.closeImageViewer = () => components.imageViewer().classList.add('hidden');
@@ -419,7 +418,7 @@
                         window.showMessage("로그인 성공!");
                         return true; 
                     } catch (e) { 
-                        window.showMessage("로그인 실패: 이메일 또는 비밀번호를 확인하세요."); 
+                        window.showMessage("로그인 실패: 정보를 확인하세요."); 
                         return false; 
                     } 
                 }); 
@@ -442,10 +441,8 @@
         #carry-over-input { color: white !important; }
         #carry-over-input:focus { color: black !important; background-color: white !important; }
         main input, .modal input, select { color: #000000 !important; }
-        /* 관리자일 때 제목 스타일 */
-        .admin-title-active { cursor: pointer; }
+        .admin-title-active { cursor: pointer; border-bottom: 2px dashed #10b981; }
         .admin-title-active:hover { color: #10b981; }
-        .admin-title-active::after { content: ' \f044'; font-family: 'Font Awesome 6 Free'; font-weight: 900; font-size: 0.4em; vertical-align: middle; opacity: 0.5; }
     </style>
 </head>
 <body class="min-h-screen">
