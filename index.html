@@ -127,18 +127,6 @@
             components.modal().classList.remove('flex');
         };
 
-        window.openImageViewer = (src) => {
-            if(!src) return;
-            components.viewerImg().src = src;
-            components.imageViewer().classList.remove('hidden');
-            components.imageViewer().classList.add('flex');
-        };
-
-        window.closeImageViewer = () => {
-            components.imageViewer().classList.add('hidden');
-            components.imageViewer().classList.remove('flex');
-        };
-
         // --- 인증 ---
         const initAuth = async () => {
             try {
@@ -196,10 +184,11 @@
                 const newList = snapshot.docs.map(doc => doc.id).sort();
                 const select = components.meetingSelect();
                 
-                // 데이터 실시간 비교: 목록의 구성 요소가 변했을 때만 렌더링
+                // 데이터 실시간 비교: 목록의 구성 요소가 변했거나 현재 선택된 값이 다를 때만 렌더링
                 const isListDifferent = JSON.stringify(meetingList) !== JSON.stringify(newList);
-                
-                if (isListDifferent) {
+                const isSelectionDifferent = select && select.value !== currentMeetingId;
+
+                if (isListDifferent || isSelectionDifferent) {
                     meetingList = newList;
                     if (meetingList.length === 0 && isAdmin) {
                         window.createNewMeeting('기본모임');
@@ -208,9 +197,6 @@
                     if (document.activeElement !== select) {
                         renderMeetingSelect();
                     }
-                } else if (select && select.value !== currentMeetingId) {
-                    // 리스트 구성은 같고 선택된 항목만 다른 경우 value만 교체하여 깜빡임 방지
-                    select.value = currentMeetingId;
                 }
             });
         };
@@ -219,7 +205,7 @@
             const select = components.meetingSelect();
             if (!select) return;
             
-            // 기존 옵션과 새로 만들 옵션 비교
+            // 기존 옵션과 새로 만들 옵션 비교하여 DOM 업데이트 최소화
             const newOptionsHtml = meetingList.map(m => 
                 `<option value="${m}" ${m === currentMeetingId ? 'selected' : ''}>${m}</option>`
             ).join('');
@@ -263,7 +249,7 @@
             });
         };
 
-        // --- 관리 기능 ---
+        // --- 관리 기능 (수정됨) ---
         window.renameMeeting = () => {
             if (!isAdmin) return;
             const bodyHtml = `<input type="text" id="rename-meeting-input" class="w-full p-4 border rounded-2xl outline-none focus:ring-2 ring-emerald-500 font-bold text-black" value="${currentMeetingId}" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
@@ -275,7 +261,8 @@
                     return false;
                 }
                 try {
-                    const oldRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', currentMeetingId);
+                    const oldId = currentMeetingId;
+                    const oldRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', oldId);
                     const newRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', newName);
                     await setDoc(newRef, appData);
                     await deleteDoc(oldRef);
@@ -304,9 +291,6 @@
             setTimeout(() => document.getElementById('new-year-input')?.focus(), 100);
         };
 
-        window.onMeetingChange = (e) => startSync(e.target.value);
-        window.changeYear = (v) => { currentYear = v; renderAll(); };
-
         window.addNewMeeting = () => {
             if (!isAdmin) return;
             const bodyHtml = `<input type="text" id="new-meeting-input" class="w-full p-4 border rounded-2xl outline-none focus:ring-2 ring-emerald-500 font-bold text-black" placeholder="새 모임 이름" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
@@ -321,6 +305,21 @@
                 return true;
             });
             setTimeout(() => document.getElementById('new-meeting-input')?.focus(), 100);
+        };
+
+        window.onMeetingChange = (e) => startSync(e.target.value);
+        window.changeYear = (v) => { currentYear = v; renderAll(); };
+        
+        window.copyShareLink = () => {
+            const baseUrl = window.location.origin + window.location.pathname;
+            const shareUrl = `${baseUrl}?m=${encodeURIComponent(currentMeetingId)}`;
+            const tempInput = document.createElement('input');
+            document.body.appendChild(tempInput);
+            tempInput.value = shareUrl;
+            tempInput.select();
+            document.execCommand('copy');
+            document.body.removeChild(tempInput);
+            window.showMessage(`모임 전체 공유 링크가 복사되었습니다.`);
         };
 
         // --- 렌더링 엔진 ---
@@ -406,9 +405,24 @@
                 html += `<td class="p-1 border-r border-slate-100 min-w-[150px]"><input value="${m.memoByYear?.[currentYear] || ''}" class="w-full h-8 px-2 outline-none font-medium text-black bg-transparent" onchange="window.updateMemberMemo(${m.id}, this.value)"></td>`;
                 tr.innerHTML = html; mBody.appendChild(tr);
             });
+
+            const allYears = [...(appData.years || [])].sort((a,b)=>a-b);
+            sHead.innerHTML = `<tr><th class="p-4 sticky left-0 z-20 bg-gray-100 border-r-2 border-slate-300 font-black text-black">성명</th>` + allYears.map(y => `<th class="p-3 border-r border-slate-200 font-black text-slate-500 text-[11px]">${y}년</th>`).join('') + `<th class="p-4 bg-emerald-700 text-white font-black">누적 합계</th></tr>`;
+            sBody.innerHTML = '';
+            (appData.members || []).forEach(m => {
+                let total = 0;
+                let trHtml = `<td class="p-4 sticky left-0 z-10 font-bold border-r-2 border-slate-300 bg-white text-center text-black">${m.name}</td>`;
+                allYears.forEach(y => {
+                    const fee = (appData.financeBase[y]?.monthlyFee || 10000); 
+                    const amt = (m.paidByYear?.[y] || []).filter(p => p).length * fee; total += amt;
+                    trHtml += `<td class="p-3 border-r border-slate-200 text-center text-black font-bold">${amt.toLocaleString()}</td>`;
+                });
+                trHtml += `<td class="p-4 bg-emerald-50 font-black text-emerald-900 text-center">${total.toLocaleString()}원</td>`;
+                const tr = document.createElement('tr'); tr.className = "border-b border-slate-100 hover:bg-slate-50"; tr.innerHTML = trHtml; sBody.appendChild(tr);
+            });
         }
 
-        // --- 기타 로직 ---
+        // --- 핸들러 ---
         window.updateMonthlyFee = (v) => { if(!isAdmin) return; appData.financeBase[currentYear].monthlyFee = Number(v) || 0; window.saveToCloud(); };
         window.updateCarryOver = (v) => { if(!isAdmin) return; appData.financeBase[currentYear].carry = Number(v) || 0; window.saveToCloud(); };
         window.updateInterest = (idx, v) => { if(!isAdmin) return; appData.financeBase[currentYear].monthlyInterest[idx] = Number(v) || 0; window.saveToCloud(); };
@@ -456,7 +470,7 @@
         #carry-over-input { color: white !important; }
         #carry-over-input:focus { color: black !important; background-color: white !important; }
         main input, .modal input, select { color: #000000 !important; }
-        .admin-active h1 { cursor: pointer; transition: color 0.2s; }
+        .admin-active h1 { cursor: pointer; transition: color 0.2s; border-bottom: none !important; }
         .admin-active h1:hover { color: #10b981; }
         .edit-icon { font-size: 0.5em; vertical-align: middle; margin-left: 10px; color: #10b981; opacity: 0.7; cursor: pointer; display: none; }
         .admin-active .edit-icon { display: inline-block; }
@@ -478,7 +492,7 @@
         </div>
     </div>
 
-    <div class="max-w-6xl mx-auto bg-white shadow-2xl min-h-screen flex flex-col border-x border-gray-200">
+    <div class="max-w-6xl mx-auto bg-white shadow-2xl min-h-screen flex flex-col border-x border-gray-200 text-black">
         <!-- 상단 바 -->
         <div class="bg-slate-900 text-white text-[11px] p-2.5 px-5 flex flex-wrap gap-y-2 justify-between items-center shadow-md">
             <div class="flex items-center flex-wrap gap-3">
@@ -531,7 +545,7 @@
                 <div class="overflow-x-auto rounded-3xl border border-slate-200 bg-white shadow-xl">
                     <table class="w-full text-center border-collapse">
                         <thead class="bg-slate-50 text-slate-400 text-[10px] font-black uppercase border-b border-slate-200">
-                            <tr><th class="p-4 sticky-col bg-slate-50 border-r-2 border-slate-200">행사명</th><th class="p-4 border-r border-slate-100">날짜</th><th class="p-4 border-r border-slate-100">상세내역</th><th class="p-4 border-r border-slate-100">입금</th><th class="p-4 border-r border-slate-100">지출</th><th class="p-4 bg-black/5 border-r border-slate-200">잔액</th><th class="p-4 border-r border-slate-100">영수증</th><th class="p-4 border-r border-slate-100">비고</th><th class="p-4 admin-only"></th></tr>
+                            <tr><th class="p-4 sticky-col bg-slate-50 border-r-2 border-slate-200">행사명</th><th class="p-4 border-r border-slate-100">날짜</th><th class="p-4 border-r border-slate-100">상세내역</th><th class="p-4 border-r border-slate-100">입금</th><th class="p-4 border-r border-slate-100">지출</th><th class="p-4 bg-black/5 border-r border-slate-200 text-black font-black">잔액</th><th class="p-4 border-r border-slate-100">영수증</th><th class="p-4 border-r border-slate-100">비고</th><th class="p-4 admin-only"></th></tr>
                         </thead>
                         <tbody id="ledger-body"></tbody>
                     </table>
