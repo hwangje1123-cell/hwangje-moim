@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>황제모임 가계부 관리 시스템</title>
-    <!-- 외부 라이브러리: Tailwind CSS, FontAwesome, SheetJS -->
+    <!-- 외부 라이브러리 -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
@@ -14,7 +14,7 @@
         import { getAuth, signInAnonymously, onAuthStateChanged, signOut, signInWithEmailAndPassword, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot, collection, deleteDoc, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // 사용자 제공 Firebase 설정
+        // Firebase 설정
         const firebaseConfig = {
             apiKey: "AIzaSyABPfmRxiNzND5O8KdgP7QtHdQ0Mf74nMc",
             authDomain: "hwangje-moim.firebaseapp.com",
@@ -26,17 +26,16 @@
 
         const appId = "hwangje-moim-finance"; 
 
-        // 초기화
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        // 상태 변수
+        // 상태 관리
         const urlParams = new URLSearchParams(window.location.search);
         let currentMeetingId = urlParams.get('m') || localStorage.getItem('last_meeting_id') || '기본모임';
-        let currentYear = urlParams.get('y') || new Date().getFullYear().toString();
+        let currentYear = urlParams.get('y'); // URL에 연도가 없으면 데이터 로딩 후 최신년도로 설정
         
-        let appData = { years: [currentYear], financeBase: {}, members: [], ledger: {}, eventNames: {} };
+        let appData = { years: [], financeBase: {}, members: [], ledger: {}, eventNames: {} };
         let isAdmin = false;
         let currentUser = null;
         let unsubscribeData = null;
@@ -70,19 +69,12 @@
             viewerImg: () => document.getElementById('viewer-img')
         };
 
-        // --- 클라우드 저장 및 동기화 ---
+        // --- 유틸리티 ---
         window.saveToCloud = async () => {
             if (!isAdmin || !currentUser) return;
             if (document.activeElement && document.activeElement.id) focusTargetId = document.activeElement.id;
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', currentMeetingId);
             await setDoc(docRef, appData);
-        };
-
-        window.createNewMeeting = async (name) => {
-            if (!currentUser) return;
-            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', name);
-            const initialData = { years: [new Date().getFullYear().toString()], financeBase: {}, members: [], ledger: {}, eventNames: {}, isInactive: false };
-            await setDoc(docRef, initialData);
         };
 
         window.ensureYearExists = (year) => {
@@ -92,10 +84,8 @@
             }
             if (!appData.ledger[year]) appData.ledger[year] = [];
             if (!appData.financeBase[year]) appData.financeBase[year] = { carry: 0, monthlyFee: 10000, monthlyInterest: Array(12).fill(0) };
-            if (!appData.eventNames[year]) appData.eventNames[year] = [];
         };
 
-        // --- 공통 UI 핸들러 ---
         window.showMessage = (msg) => {
             const toast = components.toast();
             if (!toast) return;
@@ -120,36 +110,17 @@
             components.modal().classList.remove('flex');
         };
 
-        window.openImageViewer = (src) => {
-            if(!src) return;
-            components.viewerImg().src = src;
-            components.imageViewer().classList.remove('hidden');
-            components.imageViewer().classList.add('flex');
-        };
-
-        window.closeImageViewer = () => {
-            components.imageViewer().classList.add('hidden');
-            components.imageViewer().classList.remove('flex');
-        };
-
-        // --- 인증 로직 ---
+        // --- 인증 및 초기화 ---
         const initAuth = async () => {
             try {
-                // 환경 토큰 시도
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    try {
-                        await signInWithCustomToken(auth, __initial_auth_token);
-                    } catch (e) {
-                        await signInAnonymously(auth);
-                    }
+                    try { await signInWithCustomToken(auth, __initial_auth_token); } 
+                    catch (e) { await signInAnonymously(auth); }
                 } else {
                     await signInAnonymously(auth);
                 }
             } catch (error) { 
                 console.error("Auth Error:", error); 
-                if (error.code === 'auth/admin-restricted-operation') {
-                    window.showMessage("인증 오류: 익명 로그인이 활성화되어야 합니다.");
-                }
             }
         };
 
@@ -167,7 +138,6 @@
             const btn = components.loginBtn();
             const info = components.userInfo();
             if (!btn) return;
-            
             if (isAdmin) {
                 btn.innerText = "로그아웃";
                 btn.classList.replace('bg-emerald-600', 'bg-slate-700');
@@ -175,37 +145,36 @@
             } else {
                 btn.innerText = "관리자 로그인";
                 btn.classList.replace('bg-slate-700', 'bg-emerald-600');
-                if (info) info.innerText = currentUser ? "조회 전용 모드" : "인증 대기 중...";
+                if (info) info.innerText = currentUser ? "조회 전용 모드" : "인증 중...";
             }
-            
             document.querySelectorAll('.admin-only').forEach(el => {
-                const isFlex = el.classList.contains('flex-only');
-                el.style.display = isAdmin ? (isFlex ? 'flex' : 'block') : 'none';
+                el.style.display = isAdmin ? (el.classList.contains('flex-only') ? 'flex' : 'block') : 'none';
             });
-            
-            const inputs = document.querySelectorAll('input');
-            inputs.forEach(input => {
-                if(input.id !== 'login-email' && input.id !== 'login-pw') {
-                    input.disabled = !isAdmin;
-                }
+            document.querySelectorAll('input').forEach(input => {
+                if(input.id !== 'login-email' && input.id !== 'login-pw') input.disabled = !isAdmin;
             });
         }
 
-        // --- 데이터 동기화 리스너 ---
+        // --- 데이터 동기화 (깜빡임 방지 로직 포함) ---
         const syncMeetingList = () => {
             if (!currentUser) return;
             const meetingsColl = collection(db, 'artifacts', appId, 'public', 'data', 'meetings');
             if (unsubscribeList) unsubscribeList();
             unsubscribeList = onSnapshot(meetingsColl, (snapshot) => {
-                meetingList = snapshot.docs.map(doc => doc.id);
-                if (meetingList.length === 0 && isAdmin) window.createNewMeeting('기본모임');
-                renderMeetingSelect();
+                const newList = snapshot.docs.map(doc => doc.id).sort();
+                // 리스트 내용이 실제로 변했을 때만 셀렉트 메뉴 갱신
+                if (JSON.stringify(meetingList) !== JSON.stringify(newList)) {
+                    meetingList = newList;
+                    if (meetingList.length === 0 && isAdmin) window.createNewMeeting('기본모임');
+                    renderMeetingSelect();
+                }
             });
         };
 
         function renderMeetingSelect() {
             const select = components.meetingSelect();
             if (!select) return;
+            const currentVal = select.value;
             select.innerHTML = '';
             meetingList.forEach(m => {
                 const opt = document.createElement('option');
@@ -227,114 +196,42 @@
             unsubscribeData = onSnapshot(docRef, (snapshot) => {
                 if (snapshot.exists()) {
                     appData = snapshot.data();
+                    // 연도가 지정되지 않은 경우 데이터상의 가장 최신 연도로 설정
+                    if (!currentYear && appData.years && appData.years.length > 0) {
+                        currentYear = appData.years[0];
+                    } else if (!currentYear) {
+                        currentYear = new Date().getFullYear().toString();
+                    }
                     renderAll();
                     if (focusTargetId) {
                         const el = document.getElementById(focusTargetId);
-                        if (el) {
-                            el.focus();
-                            if (el.setSelectionRange && el.type === 'text') {
-                                const len = el.value.length;
-                                el.setSelectionRange(len, len);
-                            }
-                        }
-                        focusTargetId = null;
+                        if (el) { el.focus(); focusTargetId = null; }
                     }
                 } else if (isAdmin) {
-                    appData = { years: [currentYear], financeBase: {}, members: [], ledger: {}, eventNames: {} };
+                    appData = { years: [new Date().getFullYear().toString()], financeBase: {}, members: [], ledger: {}, eventNames: {} };
                     window.saveToCloud();
                 }
             });
         };
 
-        // --- 상단 액션 ---
+        // --- 동작 ---
         window.onMeetingChange = (e) => startSync(e.target.value);
-
-        window.addNewMeeting = () => {
-            if (!isAdmin) return;
-            const bodyHtml = `<input type="text" id="new-meeting-input" ondblclick="this.select()" class="w-full p-3 border rounded-xl outline-none focus:ring-2 ring-emerald-500 font-bold text-black" placeholder="모임 이름">`;
-            window.openModal("새 모임 생성", bodyHtml, () => {
-                const name = document.getElementById('new-meeting-input').value.trim();
-                if (!name || meetingList.includes(name)) return false;
-                window.createNewMeeting(name);
-                startSync(name);
-                return true;
-            });
-        };
-
-        window.renameMeeting = () => {
-            if (!isAdmin) return;
-            const bodyHtml = `<input type="text" id="rename-meeting-input" ondblclick="this.select()" class="w-full p-3 border rounded-xl outline-none focus:ring-2 ring-emerald-500 font-bold text-black" value="${currentMeetingId}">`;
-            window.openModal("모임 이름 수정", bodyHtml, async () => {
-                const newName = document.getElementById('rename-meeting-input').value.trim();
-                if (!newName || newName === currentMeetingId) return true;
-                try {
-                    const oldId = currentMeetingId;
-                    const oldRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', oldId);
-                    const newRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', newName);
-                    await setDoc(newRef, appData);
-                    await deleteDoc(oldRef);
-                    startSync(newName);
-                    return true;
-                } catch (e) { return false; }
-            });
-        };
-
-        window.addNewYear = () => {
-            if (!isAdmin) return;
-            const bodyHtml = `<input type="number" id="new-year-input" ondblclick="this.select()" class="w-full p-3 border rounded-xl outline-none focus:ring-2 ring-emerald-500 font-bold text-center text-black" placeholder="예: 2026">`;
-            window.openModal("연도 추가", bodyHtml, () => {
-                const year = document.getElementById('new-year-input').value.trim();
-                if (year.length !== 4) return false;
-                window.ensureYearExists(year);
-                currentYear = year;
-                window.saveToCloud();
-                return true;
-            });
-        };
-
+        window.changeYear = (v) => { currentYear = v; renderAll(); };
+        
         window.copyShareLink = () => {
-            const shareUrl = `${window.location.origin}${window.location.pathname}?m=${encodeURIComponent(currentMeetingId)}&y=${currentYear}`;
+            // 연도 파라미터를 제외하여 전체를 볼 수 있도록 링크 생성
+            const baseUrl = window.location.origin + window.location.pathname;
+            const shareUrl = `${baseUrl}?m=${encodeURIComponent(currentMeetingId)}`;
             const tempInput = document.createElement('input');
             document.body.appendChild(tempInput);
             tempInput.value = shareUrl;
             tempInput.select();
             document.execCommand('copy');
             document.body.removeChild(tempInput);
-            window.showMessage(`링크가 복사되었습니다.`);
+            window.showMessage(`모임 전체 공유 링크가 복사되었습니다.`);
         };
 
-        window.downloadTemplate = () => {
-            const ledgerWS = XLSX.utils.json_to_sheet([{ "행사명": "정기모임", "날짜": "26.01.15", "상세내역": "식대", "구분": "지출", "금액": 50000, "비고": "카드" }]);
-            const memberWS = XLSX.utils.json_to_sheet([{ "이름": "홍길동", "전화번호": "010-0000-0000", "추가1": "서울", "추가2": "회원" }]);
-            const wb = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(wb, ledgerWS, "장부내역");
-            XLSX.utils.book_append_sheet(wb, memberWS, "회원명단");
-            XLSX.writeFile(wb, `황제모임_양식.xlsx`);
-        };
-
-        window.triggerUpload = () => document.getElementById('excel-upload').click();
-        window.handleExcelUpload = (event) => {
-            const file = event.target.files[0]; if(!file) return;
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                const data = new Uint8Array(e.target.result);
-                const workbook = XLSX.read(data, { type: 'array' });
-                const ledgerSheet = workbook.Sheets["장부내역"];
-                if(ledgerSheet) {
-                    const rows = XLSX.utils.sheet_to_json(ledgerSheet);
-                    appData.ledger[currentYear] = rows.map(r => ({ event: r["행사명"] || "", date: r["날짜"] || "", desc: r["상세내역"] || "", type: r["구분"] === "입금" ? "income" : "expense", amount: Number(r["금액"]) || 0, note: r["비고"] || "", image: "" }));
-                }
-                const memberSheet = workbook.Sheets["회원명단"];
-                if(memberSheet) {
-                    const rows = XLSX.utils.sheet_to_json(memberSheet);
-                    appData.members = rows.map(r => ({ id: Date.now() + Math.random(), name: r["이름"] || "무명", phone: r["전화번호"] || "", details: [r["추가1"], r["추가2"]].filter(v=>v), memoByYear: {}, paidByYear: {}, isInactive: false }));
-                }
-                window.saveToCloud(); window.showMessage("업로드 완료");
-            };
-            reader.readAsArrayBuffer(file);
-        };
-
-        // --- 렌더링 ---
+        // --- 렌더링 엔진 ---
         function renderAll() {
             renderHeader();
             renderLedger();
@@ -345,99 +242,107 @@
             components.titleYear().innerText = `${currentYear}년`;
             const dropdown = components.yearDropdown(); if (!dropdown) return;
             dropdown.innerHTML = '';
-            [...(appData.years || [])].sort((a, b) => b - a).forEach(y => {
+            [...(appData.years || [])].sort((a,b)=>b-a).forEach(y => {
                 const opt = document.createElement('option'); opt.value = y; opt.innerText = y;
                 if (y === currentYear) opt.selected = true; dropdown.appendChild(opt);
             });
             const base = appData.financeBase[currentYear] || { carry: 0, monthlyFee: 10000, monthlyInterest: Array(12).fill(0) };
-            const carryInput = components.carryInput();
-            carryInput.value = base.carry || 0;
-            carryInput.disabled = !isAdmin;
+            components.carryInput().value = base.carry || 0;
             const interestSum = (base.monthlyInterest || []).reduce((a, b) => a + b, 0);
             components.interestDisplay().innerText = interestSum.toLocaleString() + "원";
             let feeInc = 0;
             (appData.members || []).forEach(m => { if (m.paidByYear?.[currentYear]) feeInc += m.paidByYear[currentYear].filter(p => p).length * Number(base.monthlyFee); });
             components.feeDisplay().innerText = feeInc.toLocaleString() + "원";
-            let ledgerBalance = 0;
-            (appData.ledger[currentYear] || []).forEach(r => ledgerBalance += (r.type === 'income' ? r.amount : -r.amount));
-            components.finalBalance().innerText = `${(Number(base.carry) + feeInc + interestSum + ledgerBalance).toLocaleString()}원`;
+            let ledgerBal = 0;
+            (appData.ledger[currentYear] || []).forEach(r => ledgerBal += (r.type === 'income' ? r.amount : -r.amount));
+            components.finalBalance().innerText = `${(Number(base.carry) + feeInc + interestSum + ledgerBal).toLocaleString()}원`;
         }
 
         function renderLedger() {
             const filterDropdown = components.eventFilter();
             const currentFilter = filterDropdown.value || 'all';
-            const ledgerEntries = appData.ledger[currentYear] || [];
-            const allUniqueEvents = [...new Set(ledgerEntries.map(e => e.event))].filter(e => e).sort();
+            const entries = appData.ledger[currentYear] || [];
+            const events = [...new Set(entries.map(e => e.event))].filter(e => e).sort();
             filterDropdown.innerHTML = '<option value="all">전체 내역 보기</option>';
-            allUniqueEvents.forEach(ev => {
+            events.forEach(ev => {
                 const opt = document.createElement('option'); opt.value = ev; opt.innerText = ev;
                 if(ev === currentFilter) opt.selected = true; filterDropdown.appendChild(opt);
             });
-            document.getElementById('datalist-container').innerHTML = `<datalist id="event-datalist">${allUniqueEvents.map(e => `<option value="${e}">`).join('')}</datalist>`;
             const body = components.ledgerBody(); body.innerHTML = '';
-            let runningBalance = Number(appData.financeBase[currentYear]?.carry || 0);
+            let bal = Number(appData.financeBase[currentYear]?.carry || 0);
             let feeSum = 0;
             (appData.members || []).forEach(m => { if (m.paidByYear?.[currentYear]) feeSum += m.paidByYear[currentYear].filter(p => p).length * Number(appData.financeBase[currentYear]?.monthlyFee || 10000); });
-            runningBalance += feeSum + (appData.financeBase[currentYear]?.monthlyInterest || []).reduce((a,b) => a+b, 0);
-            [...ledgerEntries].sort((a,b) => (a.date||"").localeCompare(b.date||"")).forEach((r, idx) => {
-                const amtIn = r.type === 'income' ? r.amount : 0; const amtOut = r.type === 'expense' ? r.amount : 0;
-                runningBalance += (amtIn - amtOut); if (currentFilter !== 'all' && r.event !== currentFilter) return;
-                const tr = document.createElement('tr'); tr.className = "text-xs border-b border-slate-100 group bg-white";
+            bal += feeSum + (appData.financeBase[currentYear]?.monthlyInterest || []).reduce((a,b)=>a+b, 0);
+            [...entries].sort((a,b)=>(a.date||"").localeCompare(b.date||"")).forEach((r, idx) => {
+                bal += (r.type === 'income' ? r.amount : -r.amount);
+                if (currentFilter !== 'all' && r.event !== currentFilter) return;
+                const tr = document.createElement('tr'); tr.className = "text-xs border-b border-slate-100 bg-white hover:bg-slate-50";
                 tr.innerHTML = `
-                    <td class="p-0 sticky-col bg-inherit border-r-2 border-slate-200 text-center"><input list="event-datalist" value="${r.event}" ondblclick="this.select()" class="w-full h-11 px-3 text-center font-bold text-black outline-none bg-transparent" ${!isAdmin?'disabled':''} onchange="window.updateLedgerItem(${idx}, 'event', this.value)"></td>
-                    <td class="p-0 border-r border-slate-100 text-center"><input type="text" value="${r.date}" ondblclick="this.select()" class="w-full h-11 text-center font-mono text-black outline-none bg-transparent" placeholder="YY.MM.DD" ${!isAdmin?'disabled':''} oninput="window.formatDateInput(this)" onchange="window.updateLedgerItem(${idx}, 'date', this.value)"></td>
-                    <td class="p-0 border-r border-slate-100 text-center"><input type="text" value="${r.desc}" ondblclick="this.select()" class="w-full h-11 px-4 text-left text-black outline-none bg-transparent" ${!isAdmin?'disabled':''} onchange="window.updateLedgerItem(${idx}, 'desc', this.value)"></td>
-                    <td class="p-0 border-r border-slate-100 text-center"><input type="number" value="${r.type === 'income' ? r.amount : ''}" ondblclick="this.select()" class="w-full h-11 px-3 text-right font-black text-black outline-none bg-transparent" ${!isAdmin?'disabled':''} onchange="window.updateLedgerAmount(${idx}, 'income', this.value)"></td>
-                    <td class="p-0 border-r border-slate-100 text-center"><input type="number" value="${r.type === 'expense' ? r.amount : ''}" ondblclick="this.select()" class="w-full h-11 px-3 text-right font-black text-black outline-none bg-transparent" ${!isAdmin?'disabled':''} onchange="window.updateLedgerAmount(${idx}, 'expense', this.value)"></td>
-                    <td class="p-3 text-right font-black text-black bg-black/5 border-r border-slate-200">${runningBalance.toLocaleString()}</td>
-                    <td class="p-0 border-r border-slate-100 text-center">${r.image ? `<img src="${r.image}" class="w-8 h-8 object-cover rounded mx-auto" onclick="window.openImageViewer('${r.image}')">` : '-'}</td>
-                    <td class="p-0 border-r border-slate-100 text-center"><input type="text" value="${r.note || ''}" ondblclick="this.select()" class="w-full h-11 px-3 text-center italic text-black outline-none bg-transparent" ${!isAdmin?'disabled':''} onchange="window.updateLedgerItem(${idx}, 'note', this.value)"></td>
-                    <td class="p-3 w-10 text-center opacity-0 group-hover:opacity-100">${isAdmin ? `<button onclick="window.deleteLedger(${idx})" class="text-gray-300 hover:text-red-500"><i class="fa-solid fa-trash-can"></i></button>` : ''}</td>
+                    <td class="p-0 sticky-col bg-inherit border-r-2 border-slate-200"><input value="${r.event}" class="w-full h-11 px-3 text-center font-bold text-black outline-none bg-transparent" onchange="window.updateLedgerItem(${idx}, 'event', this.value)"></td>
+                    <td class="p-0 border-r border-slate-100"><input value="${r.date}" class="w-full h-11 text-center font-mono text-black outline-none bg-transparent" placeholder="YY.MM.DD" oninput="window.formatDateInput(this)" onchange="window.updateLedgerItem(${idx}, 'date', this.value)"></td>
+                    <td class="p-0 border-r border-slate-100"><input value="${r.desc}" class="w-full h-11 px-4 text-left text-black outline-none bg-transparent" onchange="window.updateLedgerItem(${idx}, 'desc', this.value)"></td>
+                    <td class="p-0 border-r border-slate-100"><input type="number" value="${r.type === 'income' ? r.amount : ''}" class="w-full h-11 px-3 text-right font-black text-black outline-none bg-transparent" onchange="window.updateLedgerAmount(${idx}, 'income', this.value)"></td>
+                    <td class="p-0 border-r border-slate-100"><input type="number" value="${r.type === 'expense' ? r.amount : ''}" class="w-full h-11 px-3 text-right font-black text-black outline-none bg-transparent" onchange="window.updateLedgerAmount(${idx}, 'expense', this.value)"></td>
+                    <td class="p-3 text-right font-black text-black bg-black/5 border-r border-slate-200">${bal.toLocaleString()}</td>
+                    <td class="p-3 border-r border-slate-100 text-center">${r.image ? `<i class="fa-solid fa-image text-emerald-500 cursor-pointer" onclick="window.openImageViewer('${r.image}')"></i>` : '-'}</td>
+                    <td class="p-0 border-r border-slate-100"><input value="${r.note || ''}" class="w-full h-11 px-3 text-center italic text-black outline-none bg-transparent" onchange="window.updateLedgerItem(${idx}, 'note', this.value)"></td>
+                    <td class="p-3 w-10 text-center">${isAdmin ? `<button onclick="window.deleteLedger(${idx})" class="text-slate-300 hover:text-red-500"><i class="fa-solid fa-trash-can"></i></button>` : ''}</td>
                 `;
                 body.appendChild(tr);
             });
-            components.filterSummary().innerHTML = currentFilter !== 'all' ? `<div class="bg-emerald-50 px-4 py-2 rounded-xl text-[11px] font-bold text-emerald-800">현재 잔액: ${runningBalance.toLocaleString()}원</div>` : '';
         }
 
         function renderIntegratedMemberSettle() {
             const mBody = components.memberBody(); const sHead = components.settleHeader(); const sBody = components.settleBody();
             if(!mBody || !sHead || !sBody) return;
-            appData.members.sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+            appData.members.sort((a,b)=>a.name.localeCompare(b.name, 'ko'));
             mBody.innerHTML = '';
-            const base = appData.financeBase[currentYear] || { monthlyInterest: Array(12).fill(0), monthlyFee: 10000 };
+            const base = appData.financeBase[currentYear] || { monthlyFee: 10000, monthlyInterest: Array(12).fill(0) };
             document.getElementById('base-fee-input').value = base.monthlyFee || 10000;
             let intTr = document.createElement('tr'); intTr.className = "bg-emerald-50/50 text-[11px]";
             let intHtml = `<td class="p-3 font-black sticky left-0 z-10 border-r-2 border-emerald-200 bg-emerald-50 text-center text-black">월별 이자(+)</td>`;
-            for(let i=0; i<12; i++) { intHtml += `<td class="p-1 border-r border-emerald-100 text-center"><input type="number" value="${base.monthlyInterest[i] || 0}" ondblclick="this.select()" class="w-full text-center bg-transparent outline-none font-bold text-black" ${!isAdmin?'disabled':''} onchange="window.updateInterest(${i}, this.value)"></td>`; }
-            intHtml += `<td class="bg-emerald-50/20 min-w-[150px] border-l border-emerald-100"></td>`;
+            for(let i=0; i<12; i++) { intHtml += `<td class="p-1 border-r border-emerald-100 text-center"><input type="number" value="${base.monthlyInterest[i] || 0}" class="w-full text-center bg-transparent outline-none font-bold text-black" onchange="window.updateInterest(${i}, this.value)"></td>`; }
+            intHtml += `<td class="bg-emerald-50/20 border-l border-emerald-100"></td>`;
             intTr.innerHTML = intHtml; mBody.appendChild(intTr);
             (appData.members || []).forEach(m => {
                 const paid = (m.paidByYear?.[currentYear]) || Array(12).fill(false);
-                const isInactive = m.isInactive === true;
-                const tr = document.createElement('tr'); tr.className = `border-b border-slate-100 text-xs hover:brightness-95 bg-white ${isInactive ? 'opacity-40 grayscale line-through pointer-events-none' : ''}`;
-                let html = `<td class="p-2 sticky left-0 z-10 border-r-2 border-slate-200 bg-inherit min-w-[250px] whitespace-nowrap"><div class="flex items-center gap-2"><div><span class="font-black text-black text-[16px] cursor-pointer" onclick="window.toggleMemberRow(${m.id})">${m.name}</span>${isAdmin ? `<button onclick="window.removeMember(${m.id})" class="ml-2 text-gray-300 hover:text-red-500"><i class="fa-solid ${isInactive ? 'fa-rotate-left' : 'fa-trash-can'} text-[11px]"></i></button>` : ''}</div></div></td>`;
-                paid.forEach((p, i) => { html += `<td class="p-1 border-r border-slate-100"><div onclick="window.toggleMemberPaid(${m.id}, ${i})" class="w-8 h-8 mx-auto flex items-center justify-center rounded-lg cursor-pointer ${p ? 'bg-emerald-600 text-white' : 'border border-slate-200'}"><i class="fa-solid fa-check text-xs"></i></div></td>`; });
-                html += `<td class="p-1 border-r border-slate-100 min-w-[150px]"><input type="text" value="${m.memoByYear?.[currentYear] || ''}" ondblclick="this.select()" class="w-full h-8 px-2 outline-none font-medium text-black bg-transparent" onchange="window.updateMemberMemo(${m.id}, this.value)"></td>`;
+                const tr = document.createElement('tr'); tr.className = `border-b border-slate-100 text-xs bg-white ${m.isInactive?'opacity-40 grayscale line-through pointer-events-none':''}`;
+                let html = `<td class="p-2 sticky left-0 z-10 border-r-2 border-slate-200 bg-inherit min-w-[250px] whitespace-nowrap"><div class="flex items-center gap-2"><span class="font-black text-black text-[15px]">${m.name}</span>${isAdmin ? `<button onclick="window.removeMember(${m.id})" class="text-slate-300 hover:text-red-500"><i class="fa-solid fa-trash-can text-[11px]"></i></button>` : ''}</div></td>`;
+                paid.forEach((p, i) => { html += `<td class="p-1 border-r border-slate-100 text-center"><div onclick="window.toggleMemberPaid(${m.id}, ${i})" class="w-8 h-8 mx-auto flex items-center justify-center rounded-lg cursor-pointer ${p ? 'bg-emerald-600 text-white' : 'border border-slate-200'}"><i class="fa-solid fa-check text-xs"></i></div></td>`; });
+                html += `<td class="p-1 border-r border-slate-100"><input value="${m.memoByYear?.[currentYear] || ''}" class="w-full h-8 px-2 outline-none font-medium text-black bg-transparent" onchange="window.updateMemberMemo(${m.id}, this.value)"></td>`;
                 tr.innerHTML = html; mBody.appendChild(tr);
+            });
+            const allYears = [...(appData.years || [])].sort((a,b)=>a-b);
+            sHead.innerHTML = `<tr><th class="p-4 sticky left-0 z-20 bg-gray-100 border-r-2 border-slate-300 font-black text-black">성명</th>` + allYears.map(y => `<th class="p-3 border-r border-slate-200 font-black text-slate-500 text-[11px]">${y}년</th>`).join('') + `<th class="p-4 bg-emerald-700 text-white font-black">누적 합계</th></tr>`;
+            sBody.innerHTML = '';
+            (appData.members || []).forEach(m => {
+                let total = 0;
+                let trHtml = `<td class="p-4 sticky left-0 z-10 font-bold border-r-2 border-slate-300 bg-white text-center text-black">${m.name}</td>`;
+                allYears.forEach(y => {
+                    const fee = (appData.financeBase[y]?.monthlyFee || 10000); 
+                    const amt = (m.paidByYear?.[y] || []).filter(p => p).length * fee; total += amt;
+                    trHtml += `<td class="p-3 border-r border-slate-200 text-center text-black font-bold">${amt.toLocaleString()}</td>`;
+                });
+                trHtml += `<td class="p-4 bg-emerald-50 font-black text-emerald-900 text-center">${total.toLocaleString()}원</td>`;
+                const tr = document.createElement('tr'); tr.className = "border-b border-slate-100 hover:bg-slate-50"; tr.innerHTML = trHtml; sBody.appendChild(tr);
             });
         }
 
-        // --- 로직 ---
-        window.updateMonthlyFee = (val) => { if(!isAdmin) return; appData.financeBase[currentYear].monthlyFee = Number(val) || 0; window.saveToCloud(); };
-        window.updateCarryOver = (val) => { if(!isAdmin) return; appData.financeBase[currentYear].carry = Number(val) || 0; window.saveToCloud(); };
-        window.formatPhone = (v) => v.replace(/[^0-9]/g, '').replace(/(\d{3})(\d{4})(\d{4})/, '$1-$2-$3');
-        window.addMember = () => { if(!isAdmin) return; const n = document.getElementById('new-mem-name'); const p = document.getElementById('new-mem-phone'); if(!n.value) return; appData.members.push({ id: Date.now(), name: n.value, phone: p.value, details: [], memoByYear: {}, paidByYear: {}, isInactive: false }); n.value = ''; p.value = ''; window.saveToCloud(); setTimeout(()=>n.focus(),50); };
+        // --- 기타 로직 ---
+        window.updateMonthlyFee = (v) => { if(!isAdmin) return; appData.financeBase[currentYear].monthlyFee = Number(v) || 0; window.saveToCloud(); };
+        window.updateCarryOver = (v) => { if(!isAdmin) return; appData.financeBase[currentYear].carry = Number(v) || 0; window.saveToCloud(); };
+        window.updateInterest = (idx, v) => { if(!isAdmin) return; appData.financeBase[currentYear].monthlyInterest[idx] = Number(v) || 0; window.saveToCloud(); };
+        window.updateMemberMemo = (id, v) => { if(!isAdmin) return; const m = appData.members.find(x => x.id === id); if(!m.memoByYear) m.memoByYear = {}; m.memoByYear[currentYear] = v; window.saveToCloud(); };
         window.toggleMemberPaid = (mid, idx) => { if(!isAdmin) return; const m = appData.members.find(x => x.id === mid); if(!m.paidByYear[currentYear]) m.paidByYear[currentYear] = Array(12).fill(false); m.paidByYear[currentYear][idx] = !m.paidByYear[currentYear][idx]; window.saveToCloud(); };
         window.removeMember = (id) => { if(!isAdmin) return; const m = appData.members.find(x => x.id === id); m.isInactive = !m.isInactive; window.saveToCloud(); };
         window.updateLedgerItem = (idx, f, v) => { if(!isAdmin) return; appData.ledger[currentYear][idx][f] = v; window.saveToCloud(); };
         window.updateLedgerAmount = (idx, t, v) => { if(!isAdmin) return; appData.ledger[currentYear][idx].type = t; appData.ledger[currentYear][idx].amount = Number(v) || 0; window.saveToCloud(); };
         window.addLedgerRow = () => { if(!isAdmin) return; appData.ledger[currentYear].push({ event: "", date: "", desc: "", type: "expense", amount: 0, note: "", image: "" }); window.saveToCloud(); };
         window.deleteLedger = (idx) => { if(!isAdmin) return; appData.ledger[currentYear].splice(idx, 1); window.saveToCloud(); };
-        window.updateInterest = (idx, v) => { if(!isAdmin) return; appData.financeBase[currentYear].monthlyInterest[idx] = Number(v) || 0; window.saveToCloud(); };
-        window.updateMemberMemo = (id, v) => { if(!isAdmin) return; const m = appData.members.find(x => x.id === id); if(!m.memoByYear) m.memoByYear = {}; m.memoByYear[currentYear] = v; window.saveToCloud(); };
+        window.formatDateInput = (el) => { let v = el.value.replace(/[^0-9.]/g, ''); el.value = v; };
         window.switchView = (id) => { document.querySelectorAll('main > div').forEach(d => d.classList.add('hidden')); document.getElementById(`view-${id}`)?.classList.remove('hidden'); document.querySelectorAll('nav button').forEach(b => b.classList.remove('active', 'text-emerald-700', 'border-emerald-700', 'bg-emerald-50')); document.getElementById(`tab-${id}`)?.classList.add('active', 'text-emerald-700', 'border-emerald-700', 'bg-emerald-50'); };
-        window.changeYear = (v) => { currentYear = v; renderAll(); };
-        window.applyFilter = () => renderLedger();
+        window.openImageViewer = (src) => { components.viewerImg().src = src; components.imageViewer().classList.remove('hidden'); components.imageViewer().classList.add('flex'); };
+        window.closeImageViewer = () => components.imageViewer().classList.add('hidden');
         window.handleAuth = async () => { if (isAdmin) { window.openModal("로그아웃", "로그아웃 하시겠습니까?", async () => { await signOut(auth); window.location.reload(); return true; }); } else { const bodyHtml = `<div class="space-y-4"><input type="email" id="login-email" class="w-full p-3 border rounded-xl text-black" placeholder="이메일"><input type="password" id="login-pw" class="w-full p-3 border rounded-xl text-black" placeholder="비밀번호"></div>`; window.openModal("관리자 로그인", bodyHtml, async () => { const email = document.getElementById('login-email').value; const pw = document.getElementById('login-pw').value; try { await signInWithEmailAndPassword(auth, email, pw); return true; } catch (e) { window.showMessage("로그인 실패"); return false; } }); } };
         
         initAuth();
@@ -452,44 +357,45 @@
         input:focus { background-color: #f0fdf4 !important; border-bottom: 2px solid #10b981 !important; outline: none; }
         .sticky-col { position: sticky; left: 0; z-index: 10; border-right: 2px solid #e2e8f0 !important; }
         .admin-only { display: none; }
-        #carry-over-input { color: white !important; transition: all 0.2s; }
-        #carry-over-input:focus { color: black !important; background-color: white !important; border-color: #10b981 !important; }
-        main input, .modal input { color: #000000 !important; }
+        #carry-over-input { color: white !important; }
+        #carry-over-input:focus { color: black !important; background-color: white !important; }
+        main input, .modal input, select { color: #000000 !important; }
     </style>
 </head>
 <body class="min-h-screen">
     <div id="datalist-container"></div>
-    <input type="file" id="excel-upload" class="hidden" accept=".xlsx, .xls" onchange="window.handleExcelUpload(event)">
-    <div id="toast-message" class="fixed top-5 left-1/2 -translate-x-1/2 z-[100] bg-slate-800 text-white px-6 py-3 rounded-full text-sm font-bold shadow-2xl opacity-0"></div>
+    <input type="file" id="excel-upload" class="hidden" onchange="window.handleExcelUpload(event)">
+    <div id="toast-message" class="fixed top-5 left-1/2 -translate-x-1/2 z-[100] bg-slate-800 text-white px-6 py-3 rounded-full text-sm font-bold shadow-2xl opacity-0 transition-opacity"></div>
 
     <div id="image-viewer" class="fixed inset-0 bg-black/90 z-[110] hidden items-center justify-center p-4 cursor-pointer" onclick="window.closeImageViewer()">
         <img id="viewer-img" src="" class="max-w-full max-h-full rounded-lg shadow-2xl object-contain">
     </div>
 
     <div id="custom-modal" class="fixed inset-0 bg-black/60 z-[90] hidden items-center justify-center p-4">
-        <div class="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl">
+        <div class="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-300">
             <div class="p-6"><h3 id="modal-title" class="text-lg font-black text-slate-900 mb-4 text-center border-b pb-2">알림</h3><div id="modal-body" class="text-slate-600 text-sm"></div></div>
             <div class="flex border-t"><button onclick="window.closeModal()" class="flex-1 py-4 text-sm font-bold text-slate-400">취소</button><button id="modal-confirm-btn" class="flex-1 py-4 text-sm font-black text-emerald-600 border-l">확인</button></div>
         </div>
     </div>
 
     <div class="max-w-6xl mx-auto bg-white shadow-2xl min-h-screen flex flex-col border-x border-gray-200">
+        <!-- 상단 고정 너비 레이아웃 -->
         <div class="bg-slate-900 text-white text-[11px] p-2.5 px-5 flex flex-wrap gap-y-2 justify-between items-center shadow-md">
             <div class="flex items-center flex-wrap gap-3">
-                <div class="flex items-center bg-white rounded-full pr-1 min-w-[180px]">
-                    <div class="flex items-center gap-1.5 px-3 py-1.5"><i class="fa-solid fa-users text-emerald-600"></i><span class="font-black text-slate-400">모임</span><select id="meeting-select" onchange="window.onMeetingChange(event)" class="bg-transparent text-black font-black outline-none cursor-pointer"></select></div>
-                    <button onclick="window.addNewMeeting()" class="bg-emerald-600 w-7 h-7 rounded-full flex items-center justify-center admin-only"><i class="fa-solid fa-plus text-[10px]"></i></button>
+                <div class="flex items-center bg-white rounded-full pr-1 w-[200px] shrink-0">
+                    <div class="flex items-center gap-1.5 px-3 py-1.5 overflow-hidden w-full"><i class="fa-solid fa-users text-emerald-600"></i><span class="font-black text-slate-400 shrink-0">모임</span><select id="meeting-select" onchange="window.onMeetingChange(event)" class="bg-transparent text-black font-black outline-none cursor-pointer w-full truncate"></select></div>
+                    <button onclick="window.addNewMeeting()" class="bg-emerald-600 w-7 h-7 shrink-0 rounded-full flex items-center justify-center admin-only"><i class="fa-solid fa-plus text-[10px]"></i></button>
                 </div>
-                <div class="flex items-center bg-white rounded-full pr-1 min-w-[160px]">
-                    <div class="flex items-center gap-1.5 px-3 py-1.5"><i class="fa-solid fa-calendar-days text-emerald-600"></i><span class="font-black text-slate-400">연도</span><select id="year-dropdown" onchange="window.changeYear(this.value)" class="bg-transparent text-black font-black outline-none cursor-pointer"></select></div>
-                    <button onclick="window.addNewYear()" class="bg-emerald-600 w-7 h-7 rounded-full flex items-center justify-center admin-only"><i class="fa-solid fa-plus text-[10px]"></i></button>
+                <div class="flex items-center bg-white rounded-full pr-1 w-[160px] shrink-0">
+                    <div class="flex items-center gap-1.5 px-3 py-1.5 w-full"><i class="fa-solid fa-calendar-days text-emerald-600"></i><span class="font-black text-slate-400 shrink-0">연도</span><select id="year-dropdown" onchange="window.changeYear(this.value)" class="bg-transparent text-black font-black outline-none cursor-pointer w-full"></select></div>
+                    <button onclick="window.addNewYear()" class="bg-emerald-600 w-7 h-7 shrink-0 rounded-full flex items-center justify-center admin-only"><i class="fa-solid fa-plus text-[10px]"></i></button>
                 </div>
-                <button onclick="window.copyShareLink()" class="bg-slate-700 text-white px-3 py-1.5 rounded-full flex items-center gap-2"><i class="fa-solid fa-share-nodes text-[10px]"></i><span class="font-black text-[10px]">링크공유</span></button>
+                <button onclick="window.copyShareLink()" class="bg-slate-700 text-white px-3 py-1.5 rounded-full flex items-center gap-2 shrink-0"><i class="fa-solid fa-share-nodes text-[10px]"></i><span class="font-black text-[10px]">링크공유</span></button>
             </div>
-            <div class="flex gap-2">
+            <div class="flex gap-2 shrink-0">
                 <button onclick="window.downloadTemplate()" class="bg-slate-700 px-3 py-1.5 rounded-lg font-black admin-only">양식다운</button>
                 <button onclick="window.triggerUpload()" class="bg-slate-700 px-3 py-1.5 rounded-lg font-black admin-only">업로드</button>
-                <button id="loginBtn" onclick="window.handleAuth()" class="bg-emerald-600 px-3 py-1.5 rounded-lg font-black">관리자 로그인</button>
+                <button id="loginBtn" onclick="window.handleAuth()" class="bg-emerald-600 px-3 py-1.5 rounded-lg font-black min-w-[100px]">관리자 로그인</button>
             </div>
         </div>
 
@@ -504,7 +410,7 @@
             <div class="grid grid-cols-3 gap-4 relative z-10 mb-4 text-center">
                 <div class="bg-white/5 p-4 rounded-2xl border border-white/10 backdrop-blur-md">
                     <p class="text-[10px] text-emerald-400 font-black mb-1 opacity-80">이월액</p>
-                    <input type="number" id="carry-over-input" ondblclick="this.select()" onchange="window.updateCarryOver(this.value)" class="bg-transparent text-lg font-black w-full outline-none text-center rounded-lg transition-all" placeholder="0">
+                    <input type="number" id="carry-over-input" onchange="window.updateCarryOver(this.value)" class="bg-transparent text-lg font-black w-full outline-none text-center rounded-lg transition-all" placeholder="0">
                 </div>
                 <div class="bg-white/5 p-4 rounded-2xl border border-white/10 backdrop-blur-md"><p class="text-[10px] text-emerald-400 font-black mb-1 opacity-80">회비 합계</p><h3 id="fee-total-display" class="text-lg font-black text-white">0원</h3></div>
                 <div class="bg-white/5 p-4 rounded-2xl border border-white/10 backdrop-blur-md"><p class="text-[10px] text-emerald-400 font-black mb-1 opacity-80">이자 합계</p><h3 id="interest-total-display" class="text-lg font-black text-white">0원</h3></div>
@@ -512,7 +418,7 @@
             <div class="bg-emerald-500 p-5 rounded-2xl shadow-2xl border border-emerald-400/30 relative z-10"><div class="flex justify-between items-center"><p class="text-[11px] text-emerald-900 font-black italic">현재 총 잔액</p><h3 id="final-balance" class="text-3xl font-black text-white tracking-tighter">0원</h3></div></div>
         </header>
 
-        <nav class="flex items-center border-b sticky top-0 bg-white/90 backdrop-blur-lg z-20">
+        <nav class="flex items-center border-b sticky top-0 bg-white/90 backdrop-blur-lg z-20 shadow-sm">
             <button id="tab-ledger" onclick="window.switchView('ledger')" class="tab-btn flex-1 py-5 text-sm font-black text-slate-400 active">장부 기록</button>
             <button id="tab-member" onclick="window.switchView('member')" class="tab-btn flex-1 py-5 text-sm font-black text-slate-400">명부 및 정산</button>
         </nav>
@@ -520,18 +426,18 @@
         <main class="p-6 flex-1 bg-slate-50/30">
             <div id="view-ledger" class="space-y-4">
                 <div class="flex items-center justify-between">
-                    <select id="event-filter" onchange="window.applyFilter()" class="bg-white border rounded-full px-4 py-2 text-xs font-bold text-black min-w-[120px]"></select>
+                    <select id="event-filter" onchange="window.applyFilter()" class="bg-white border rounded-full px-4 py-2 text-xs font-bold text-black min-w-[120px] outline-none shadow-sm"></select>
                     <div id="filter-summary"></div>
                 </div>
                 <div class="overflow-x-auto rounded-3xl border border-slate-200 bg-white shadow-xl">
-                    <table class="w-full text-center">
+                    <table class="w-full text-center border-collapse">
                         <thead class="bg-slate-50 text-slate-400 text-[10px] font-black uppercase border-b">
                             <tr><th class="p-4 sticky-col bg-slate-50 border-r-2">행사명</th><th class="p-4 border-r">날짜</th><th class="p-4 border-r">상세내역</th><th class="p-4 border-r">입금</th><th class="p-4 border-r">지출</th><th class="p-4 bg-black/5 border-r">잔액</th><th class="p-4 border-r">영수증</th><th class="p-4 border-r">비고</th><th class="p-4 admin-only"></th></tr>
                         </thead>
                         <tbody id="ledger-body"></tbody>
                     </table>
                 </div>
-                <button onclick="window.addLedgerRow()" class="w-full py-6 border-2 border-dashed border-slate-200 text-slate-400 font-black rounded-3xl hover:bg-white admin-only flex-only items-center justify-center"><i class="fa-solid fa-circle-plus mr-2 text-lg"></i>거래 내역 추가</button>
+                <button onclick="window.addLedgerRow()" class="w-full py-6 border-2 border-dashed border-slate-200 text-slate-400 font-black rounded-3xl hover:bg-white admin-only flex-only items-center justify-center transition-all"><i class="fa-solid fa-circle-plus mr-2 text-lg"></i>거래 내역 추가</button>
             </div>
             
             <div id="view-member" class="hidden space-y-10">
@@ -539,14 +445,14 @@
                     <div class="flex items-center justify-between">
                         <h2 class="text-xl font-black text-slate-800 tracking-tight">회원 명부 및 월납 현황</h2>
                         <div class="admin-only flex gap-2 items-center">
-                            <input type="number" id="base-fee-input" class="w-20 p-2 text-sm font-bold border rounded-xl" onchange="window.updateMonthlyFee(this.value)">
-                            <input type="text" id="new-mem-name" placeholder="이름" class="w-24 p-2.5 border rounded-xl text-sm font-bold">
-                            <input type="text" id="new-mem-phone" placeholder="전화번호" class="w-32 p-2.5 border rounded-xl text-sm font-bold">
-                            <button onclick="window.addMember()" class="bg-slate-900 text-white px-6 rounded-xl text-sm font-black">등록</button>
+                            <input type="number" id="base-fee-input" class="w-20 p-2 text-sm font-bold border rounded-xl outline-none" onchange="window.updateMonthlyFee(this.value)">
+                            <input type="text" id="new-mem-name" placeholder="이름" class="w-24 p-2.5 border rounded-xl text-sm font-bold outline-none">
+                            <input type="text" id="new-mem-phone" placeholder="전화번호" class="w-32 p-2.5 border rounded-xl text-sm font-bold outline-none">
+                            <button onclick="window.addMember()" class="bg-slate-900 text-white px-6 rounded-xl text-sm font-black hover:bg-emerald-700 transition-colors">등록</button>
                         </div>
                     </div>
                     <div class="overflow-x-auto rounded-3xl border border-slate-200 bg-white shadow-2xl">
-                        <table class="w-full text-center">
+                        <table class="w-full text-center border-collapse">
                             <thead class="bg-slate-100 text-[10px] text-slate-500 font-black border-b">
                                 <tr><th class="p-4 sticky left-0 z-20 bg-slate-100 border-r-2 min-w-[250px] text-black">회원 정보</th><th class="p-2 border-r">1</th><th class="p-2 border-r">2</th><th class="p-2 border-r">3</th><th class="p-2 border-r">4</th><th class="p-2 border-r">5</th><th class="p-2 border-r">6</th><th class="p-2 border-r">7</th><th class="p-2 border-r">8</th><th class="p-2 border-r">9</th><th class="p-2 border-r">10</th><th class="p-2 border-r">11</th><th class="p-2 border-r">12</th><th class="p-4 min-w-[150px] text-black">비고</th></tr>
                             </thead>
@@ -554,18 +460,18 @@
                         </table>
                     </div>
                 </section>
-                <section class="space-y-4 text-black">
+                <section class="space-y-4">
                     <h2 class="text-xl font-black text-slate-800 tracking-tight">년도별 회비 정산 요약</h2>
                     <div class="overflow-x-auto rounded-3xl border border-slate-200 bg-white shadow-2xl">
                         <table class="w-full text-center border-collapse">
-                            <thead id="settle-header-row" class="bg-slate-100 font-black text-slate-500 border-b-2"></thead>
+                            <thead id="settle-header-row" class="bg-slate-100 font-black text-slate-500 border-b-2 text-black"></thead>
                             <tbody id="settle-body"></tbody>
                         </table>
                     </div>
                 </section>
             </div>
         </main>
-        <footer class="p-8 text-center text-[10px] text-black border-t bg-slate-50 font-bold">&copy; 2026 황제모임 재정 관리 시스템.</footer>
+        <footer class="p-8 text-center text-[10px] text-black border-t bg-slate-50 font-bold">&copy; 2026 <span id="footer-meeting-name"></span> 황제모임 재정 관리 시스템.</footer>
     </div>
 </body>
 </html>
