@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>황제모임 가계부 관리 시스템</title>
-    <!-- 외부 라이브러리 -->
+    <!-- 외부 라이브러리: Tailwind CSS, FontAwesome, SheetJS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
@@ -14,6 +14,7 @@
         import { getAuth, signInAnonymously, onAuthStateChanged, signOut, signInWithEmailAndPassword, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot, collection, deleteDoc, query, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
+        // 사용자 제공 Firebase 설정
         const firebaseConfig = {
             apiKey: "AIzaSyABPfmRxiNzND5O8KdgP7QtHdQ0Mf74nMc",
             authDomain: "hwangje-moim.firebaseapp.com",
@@ -29,6 +30,7 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
 
+        // 상태 변수
         const urlParams = new URLSearchParams(window.location.search);
         let currentMeetingId = urlParams.get('m') || localStorage.getItem('last_meeting_id') || '기본모임';
         let currentYear = urlParams.get('y') || new Date().getFullYear().toString();
@@ -68,7 +70,7 @@
             viewerImg: () => document.getElementById('viewer-img')
         };
 
-        // --- 헬퍼 함수 ---
+        // --- 클라우드 저장 및 동기화 ---
         window.saveToCloud = async () => {
             if (!isAdmin || !currentUser) return;
             if (document.activeElement && document.activeElement.id) focusTargetId = document.activeElement.id;
@@ -76,8 +78,15 @@
             await setDoc(docRef, appData);
         };
 
+        window.createNewMeeting = async (name) => {
+            if (!currentUser) return;
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', name);
+            const initialData = { years: [new Date().getFullYear().toString()], financeBase: {}, members: [], ledger: {}, eventNames: {}, isInactive: false };
+            await setDoc(docRef, initialData);
+        };
+
         window.ensureYearExists = (year) => {
-            if (!appData.years) appData.years = [];
+            if (!Array.isArray(appData.years)) appData.years = [];
             if (!appData.years.includes(year)) {
                 appData.years.push(year);
                 appData.years.sort((a, b) => b - a);
@@ -103,6 +112,7 @@
             components.modalBody().innerHTML = bodyHtml;
             components.modal().classList.remove('hidden');
             components.modal().classList.add('flex');
+            
             const confirmBtn = document.getElementById('modal-confirm-btn');
             const newBtn = confirmBtn.cloneNode(true);
             confirmBtn.parentNode.replaceChild(newBtn, confirmBtn);
@@ -117,6 +127,18 @@
             components.modal().classList.remove('flex');
         };
 
+        window.openImageViewer = (src) => {
+            if(!src) return;
+            components.viewerImg().src = src;
+            components.imageViewer().classList.remove('hidden');
+            components.imageViewer().classList.add('flex');
+        };
+
+        window.closeImageViewer = () => {
+            components.imageViewer().classList.add('hidden');
+            components.imageViewer().classList.remove('flex');
+        };
+
         // --- 인증 ---
         const initAuth = async () => {
             try {
@@ -126,7 +148,9 @@
                 } else {
                     await signInAnonymously(auth);
                 }
-            } catch (error) { console.error("Auth Error:", error); }
+            } catch (error) { 
+                console.error("Auth Error:", error); 
+            }
         };
 
         onAuthStateChanged(auth, (user) => {
@@ -153,16 +177,17 @@
             } else {
                 btn.innerText = "관리자 로그인";
                 btn.classList.replace('bg-slate-700', 'bg-emerald-600');
-                if (info) info.innerText = currentUser ? "조회 전용 모드" : "인증 중...";
+                if (info) info.innerText = currentUser ? "조회 전용 모드" : "인증 대기 중...";
                 if (titleCont) titleCont.classList.remove('admin-active');
             }
             
             document.querySelectorAll('.admin-only').forEach(el => {
-                el.style.display = isAdmin ? (el.classList.contains('flex-only') ? 'flex' : 'block') : 'none';
+                const isFlex = el.classList.contains('flex-only');
+                el.style.display = isAdmin ? (isFlex ? 'flex' : 'block') : 'none';
             });
         }
 
-        // --- 데이터 동기화 (깜빡임 문제 해결) ---
+        // --- 데이터 동기화 (깜빡임 문제 완벽 해결) ---
         const syncMeetingList = () => {
             if (!currentUser) return;
             const meetingsColl = collection(db, 'artifacts', appId, 'public', 'data', 'meetings');
@@ -171,15 +196,21 @@
                 const newList = snapshot.docs.map(doc => doc.id).sort();
                 const select = components.meetingSelect();
                 
-                // 데이터 실시간 비교: 목록이나 현재 선택값이 다를 때만 갱신
-                if (JSON.stringify(meetingList) !== JSON.stringify(newList)) {
+                // 데이터 실시간 비교: 목록의 구성 요소가 변했을 때만 렌더링
+                const isListDifferent = JSON.stringify(meetingList) !== JSON.stringify(newList);
+                
+                if (isListDifferent) {
                     meetingList = newList;
                     if (meetingList.length === 0 && isAdmin) {
                         window.createNewMeeting('기본모임');
                     }
+                    // 현재 드롭다운을 조작 중이지 않을 때만 UI 갱신
                     if (document.activeElement !== select) {
                         renderMeetingSelect();
                     }
+                } else if (select && select.value !== currentMeetingId) {
+                    // 리스트 구성은 같고 선택된 항목만 다른 경우 value만 교체하여 깜빡임 방지
+                    select.value = currentMeetingId;
                 }
             });
         };
@@ -187,11 +218,14 @@
         function renderMeetingSelect() {
             const select = components.meetingSelect();
             if (!select) return;
-            const options = meetingList.map(m => 
+            
+            // 기존 옵션과 새로 만들 옵션 비교
+            const newOptionsHtml = meetingList.map(m => 
                 `<option value="${m}" ${m === currentMeetingId ? 'selected' : ''}>${m}</option>`
             ).join('');
-            if (select.innerHTML !== options) {
-                select.innerHTML = options;
+            
+            if (select.innerHTML !== newOptionsHtml) {
+                select.innerHTML = newOptionsHtml;
             }
         }
 
@@ -212,7 +246,7 @@
                     appData = data;
                     if (!appData.years || appData.years.length === 0) appData.years = [currentYear];
                     
-                    // 연도 정보 동기화
+                    // 연도 정보 동기화 및 렌더링
                     if (!appData.years.includes(currentYear)) {
                         currentYear = appData.years[0];
                     }
@@ -276,10 +310,13 @@
         window.addNewMeeting = () => {
             if (!isAdmin) return;
             const bodyHtml = `<input type="text" id="new-meeting-input" class="w-full p-4 border rounded-2xl outline-none focus:ring-2 ring-emerald-500 font-bold text-black" placeholder="새 모임 이름" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
-            window.openModal("새 모임 생성", bodyHtml, () => {
+            window.openModal("새 모임 생성", bodyHtml, async () => {
                 const name = document.getElementById('new-meeting-input').value.trim();
-                if (!name || meetingList.includes(name)) return false;
-                window.createNewMeeting(name);
+                if (!name || meetingList.includes(name)) {
+                    window.showMessage("사용할 수 없는 이름이거나 이미 존재합니다.");
+                    return false;
+                }
+                await window.createNewMeeting(name);
                 startSync(name);
                 return true;
             });
@@ -419,9 +456,7 @@
         #carry-over-input { color: white !important; }
         #carry-over-input:focus { color: black !important; background-color: white !important; }
         main input, .modal input, select { color: #000000 !important; }
-        
-        /* 제목 및 수정 아이콘 */
-        .admin-active h1 { cursor: pointer; transition: color 0.2s; border-bottom: none !important; }
+        .admin-active h1 { cursor: pointer; transition: color 0.2s; }
         .admin-active h1:hover { color: #10b981; }
         .edit-icon { font-size: 0.5em; vertical-align: middle; margin-left: 10px; color: #10b981; opacity: 0.7; cursor: pointer; display: none; }
         .admin-active .edit-icon { display: inline-block; }
@@ -443,7 +478,7 @@
         </div>
     </div>
 
-    <div class="max-w-6xl mx-auto bg-white shadow-2xl min-h-screen flex flex-col border-x border-gray-200 text-black">
+    <div class="max-w-6xl mx-auto bg-white shadow-2xl min-h-screen flex flex-col border-x border-gray-200">
         <!-- 상단 바 -->
         <div class="bg-slate-900 text-white text-[11px] p-2.5 px-5 flex flex-wrap gap-y-2 justify-between items-center shadow-md">
             <div class="flex items-center flex-wrap gap-3">
@@ -465,7 +500,7 @@
         <header class="bg-gradient-to-br from-emerald-900 to-slate-900 text-white p-8 relative overflow-hidden">
             <div id="title-container" class="flex justify-between items-end mb-8 relative z-10">
                 <div class="flex items-center">
-                    <h1 id="main-title" onclick="window.renameMeeting()" class="text-3xl font-black tracking-tighter">기본모임</h1>
+                    <h1 id="main-title" onclick="window.renameMeeting()" class="text-3xl font-black tracking-tighter transition-colors">기본모임</h1>
                     <i class="fa-solid fa-pen edit-icon" onclick="window.renameMeeting()"></i>
                     <span id="title-year" class="text-emerald-500 font-medium text-lg ml-3"></span>
                 </div>
@@ -482,12 +517,12 @@
             <div class="bg-emerald-500 p-5 rounded-2xl shadow-2xl border border-emerald-400/30 relative z-10"><div class="flex justify-between items-center"><p class="text-[11px] text-emerald-900 font-black italic uppercase tracking-widest">현재 총 잔액</p><h3 id="final-balance" class="text-3xl font-black text-white tracking-tighter">0원</h3></div></div>
         </header>
 
-        <nav class="flex items-center border-b sticky top-0 bg-white/90 backdrop-blur-lg z-20 shadow-sm">
+        <nav class="flex items-center border-b sticky top-0 bg-white/90 backdrop-blur-lg z-20 shadow-sm text-black">
             <button id="tab-ledger" onclick="window.switchView('ledger')" class="tab-btn flex-1 py-5 text-sm font-black text-slate-400 active">장부 기록</button>
             <button id="tab-member" onclick="window.switchView('member')" class="tab-btn flex-1 py-5 text-sm font-black text-slate-400">명부 및 정산</button>
         </nav>
 
-        <main class="p-6 flex-1 bg-slate-50/30">
+        <main class="p-6 flex-1 bg-slate-50/30 text-black">
             <div id="view-ledger" class="space-y-4">
                 <div class="flex items-center justify-between">
                     <select id="event-filter" onchange="window.applyFilter()" class="bg-white border border-slate-200 rounded-full px-4 py-2 text-xs font-bold text-black min-w-[120px] shadow-sm cursor-pointer outline-none"></select>
@@ -496,7 +531,7 @@
                 <div class="overflow-x-auto rounded-3xl border border-slate-200 bg-white shadow-xl">
                     <table class="w-full text-center border-collapse">
                         <thead class="bg-slate-50 text-slate-400 text-[10px] font-black uppercase border-b border-slate-200">
-                            <tr><th class="p-4 sticky-col bg-slate-50 border-r-2 border-slate-200">행사명</th><th class="p-4 border-r border-slate-100">날짜</th><th class="p-4 border-r border-slate-100">상세내역</th><th class="p-4 border-r border-slate-100">입금</th><th class="p-4 border-r border-slate-100">지출</th><th class="p-4 bg-black/5 border-r border-slate-200 text-black font-black">잔액</th><th class="p-4 border-r border-slate-100">영수증</th><th class="p-4 border-r border-slate-100">비고</th><th class="p-4 admin-only"></th></tr>
+                            <tr><th class="p-4 sticky-col bg-slate-50 border-r-2 border-slate-200">행사명</th><th class="p-4 border-r border-slate-100">날짜</th><th class="p-4 border-r border-slate-100">상세내역</th><th class="p-4 border-r border-slate-100">입금</th><th class="p-4 border-r border-slate-100">지출</th><th class="p-4 bg-black/5 border-r border-slate-200">잔액</th><th class="p-4 border-r border-slate-100">영수증</th><th class="p-4 border-r border-slate-100">비고</th><th class="p-4 admin-only"></th></tr>
                         </thead>
                         <tbody id="ledger-body"></tbody>
                     </table>
@@ -509,9 +544,9 @@
                     <div class="flex items-center justify-between">
                         <h2 class="text-xl font-black text-slate-800 tracking-tight">회원 명부 및 월납 현황</h2>
                         <div class="admin-only flex gap-2 items-center">
-                            <input type="number" id="base-fee-input" class="w-20 p-2 text-sm font-bold border border-slate-200 rounded-xl outline-none" onchange="window.updateMonthlyFee(this.value)">
-                            <input type="text" id="new-mem-name" placeholder="이름" class="w-24 p-2.5 border border-slate-200 rounded-xl text-sm font-bold outline-none">
-                            <input type="text" id="new-mem-phone" placeholder="전화번호" class="w-32 p-2.5 border border-slate-200 rounded-xl text-sm font-bold outline-none">
+                            <input type="number" id="base-fee-input" class="w-20 p-2 text-sm font-bold border border-slate-200 rounded-xl" onchange="window.updateMonthlyFee(this.value)">
+                            <input type="text" id="new-mem-name" placeholder="이름" class="w-24 p-2.5 border border-slate-200 rounded-xl text-sm font-bold">
+                            <input type="text" id="new-mem-phone" placeholder="전화번호" class="w-32 p-2.5 border border-slate-200 rounded-xl text-sm font-bold">
                             <button onclick="window.addMember()" class="bg-slate-900 text-white px-6 rounded-xl text-sm font-black hover:bg-emerald-700 active:scale-95 transition-all">등록</button>
                         </div>
                     </div>
