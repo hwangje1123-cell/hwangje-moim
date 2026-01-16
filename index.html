@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>황제모임 가계부 관리 시스템</title>
-    <!-- 외부 라이브러리: Tailwind CSS, FontAwesome, SheetJS -->
+    <!-- 외부 라이브러리 -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
@@ -12,9 +12,8 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signOut, signInWithEmailAndPassword, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, onSnapshot, collection, deleteDoc, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, deleteDoc, query, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // 사용자 제공 Firebase 설정
         const firebaseConfig = {
             apiKey: "AIzaSyABPfmRxiNzND5O8KdgP7QtHdQ0Mf74nMc",
             authDomain: "hwangje-moim.firebaseapp.com",
@@ -26,17 +25,15 @@
 
         const appId = "hwangje-moim-finance"; 
 
-        // 초기화
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        // 상태 변수
         const urlParams = new URLSearchParams(window.location.search);
         let currentMeetingId = urlParams.get('m') || localStorage.getItem('last_meeting_id') || '기본모임';
-        let currentYear = urlParams.get('y'); 
+        let currentYear = urlParams.get('y') || new Date().getFullYear().toString();
         
-        let appData = { years: [], financeBase: {}, members: [], ledger: {}, eventNames: {} };
+        let appData = { years: [currentYear], financeBase: {}, members: [], ledger: {}, eventNames: {} };
         let isAdmin = false;
         let currentUser = null;
         let unsubscribeData = null;
@@ -71,7 +68,7 @@
             viewerImg: () => document.getElementById('viewer-img')
         };
 
-        // --- 클라우드 저장 및 동기화 ---
+        // --- 헬퍼 함수 ---
         window.saveToCloud = async () => {
             if (!isAdmin || !currentUser) return;
             if (document.activeElement && document.activeElement.id) focusTargetId = document.activeElement.id;
@@ -79,15 +76,8 @@
             await setDoc(docRef, appData);
         };
 
-        window.createNewMeeting = async (name) => {
-            if (!currentUser) return;
-            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', name);
-            const initialData = { years: [new Date().getFullYear().toString()], financeBase: {}, members: [], ledger: {}, eventNames: {}, isInactive: false };
-            await setDoc(docRef, initialData);
-        };
-
         window.ensureYearExists = (year) => {
-            if (!Array.isArray(appData.years)) appData.years = [];
+            if (!appData.years) appData.years = [];
             if (!appData.years.includes(year)) {
                 appData.years.push(year);
                 appData.years.sort((a, b) => b - a);
@@ -116,7 +106,10 @@
             const confirmBtn = document.getElementById('modal-confirm-btn');
             const newBtn = confirmBtn.cloneNode(true);
             confirmBtn.parentNode.replaceChild(newBtn, confirmBtn);
-            newBtn.onclick = async () => { if (await onConfirm() !== false) window.closeModal(); };
+            newBtn.onclick = async () => { 
+                const result = await onConfirm();
+                if (result !== false) window.closeModal(); 
+            };
         };
 
         window.closeModal = () => {
@@ -124,19 +117,7 @@
             components.modal().classList.remove('flex');
         };
 
-        window.openImageViewer = (src) => {
-            if(!src) return;
-            components.viewerImg().src = src;
-            components.imageViewer().classList.remove('hidden');
-            components.imageViewer().classList.add('flex');
-        };
-
-        window.closeImageViewer = () => {
-            components.imageViewer().classList.add('hidden');
-            components.imageViewer().classList.remove('flex');
-        };
-
-        // --- 인증 및 초기화 ---
+        // --- 인증 ---
         const initAuth = async () => {
             try {
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -145,9 +126,7 @@
                 } else {
                     await signInAnonymously(auth);
                 }
-            } catch (error) { 
-                console.error("Auth Error:", error); 
-            }
+            } catch (error) { console.error("Auth Error:", error); }
         };
 
         onAuthStateChanged(auth, (user) => {
@@ -174,21 +153,16 @@
             } else {
                 btn.innerText = "관리자 로그인";
                 btn.classList.replace('bg-slate-700', 'bg-emerald-600');
-                if (info) info.innerText = currentUser ? "조회 전용 모드" : "인증 대기 중...";
+                if (info) info.innerText = currentUser ? "조회 전용 모드" : "인증 중...";
                 if (titleCont) titleCont.classList.remove('admin-active');
             }
             
             document.querySelectorAll('.admin-only').forEach(el => {
-                const isFlex = el.classList.contains('flex-only');
-                el.style.display = isAdmin ? (isFlex ? 'flex' : 'block') : 'none';
-            });
-            
-            document.querySelectorAll('input').forEach(input => {
-                if(input.id !== 'login-email' && input.id !== 'login-pw') input.disabled = !isAdmin;
+                el.style.display = isAdmin ? (el.classList.contains('flex-only') ? 'flex' : 'block') : 'none';
             });
         }
 
-        // --- 데이터 동기화 (깜빡임 차단 고도화) ---
+        // --- 데이터 동기화 (깜빡임 문제 해결) ---
         const syncMeetingList = () => {
             if (!currentUser) return;
             const meetingsColl = collection(db, 'artifacts', appId, 'public', 'data', 'meetings');
@@ -197,20 +171,15 @@
                 const newList = snapshot.docs.map(doc => doc.id).sort();
                 const select = components.meetingSelect();
                 
-                // 데이터가 정말로 변했는지 대조
-                const isDataChanged = JSON.stringify(meetingList) !== JSON.stringify(newList);
-                
-                if (isDataChanged) {
+                // 데이터 실시간 비교: 목록이나 현재 선택값이 다를 때만 갱신
+                if (JSON.stringify(meetingList) !== JSON.stringify(newList)) {
                     meetingList = newList;
-                    if (meetingList.length === 0 && isAdmin) window.createNewMeeting('기본모임');
-                    
-                    // 드롭다운에 포커스가 없을 때만 리렌더링하여 사용자 조작 방해 금지
+                    if (meetingList.length === 0 && isAdmin) {
+                        window.createNewMeeting('기본모임');
+                    }
                     if (document.activeElement !== select) {
                         renderMeetingSelect();
                     }
-                } else if (select && select.value !== currentMeetingId) {
-                    // 리스트 구성은 같고 선택된 항목만 다른 경우 value만 조용히 변경
-                    select.value = currentMeetingId;
                 }
             });
         };
@@ -218,13 +187,11 @@
         function renderMeetingSelect() {
             const select = components.meetingSelect();
             if (!select) return;
-            
-            const newOptionsHtml = meetingList.map(m => 
+            const options = meetingList.map(m => 
                 `<option value="${m}" ${m === currentMeetingId ? 'selected' : ''}>${m}</option>`
             ).join('');
-            
-            if (select.innerHTML !== newOptionsHtml) {
-                select.innerHTML = newOptionsHtml;
+            if (select.innerHTML !== options) {
+                select.innerHTML = options;
             }
         }
 
@@ -241,26 +208,28 @@
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', meetingId);
             unsubscribeData = onSnapshot(docRef, (snapshot) => {
                 if (snapshot.exists()) {
-                    appData = snapshot.data();
-                    if (!appData.years) appData.years = [new Date().getFullYear().toString()];
-                    if (!currentYear && appData.years.length > 0) {
+                    const data = snapshot.data();
+                    appData = data;
+                    if (!appData.years || appData.years.length === 0) appData.years = [currentYear];
+                    
+                    // 연도 정보 동기화
+                    if (!appData.years.includes(currentYear)) {
                         currentYear = appData.years[0];
-                    } else if (!currentYear) {
-                        currentYear = new Date().getFullYear().toString();
                     }
+                    
                     renderAll();
                     if (focusTargetId) {
                         const el = document.getElementById(focusTargetId);
                         if (el) { el.focus(); focusTargetId = null; }
                     }
                 } else if (isAdmin) {
-                    appData = { years: [new Date().getFullYear().toString()], financeBase: {}, members: [], ledger: {}, eventNames: {} };
+                    appData = { years: [currentYear], financeBase: {}, members: [], ledger: {}, eventNames: {} };
                     window.saveToCloud();
                 }
             });
         };
 
-        // --- 모임 이름 수정 ---
+        // --- 관리 기능 ---
         window.renameMeeting = () => {
             if (!isAdmin) return;
             const bodyHtml = `<input type="text" id="rename-meeting-input" class="w-full p-4 border rounded-2xl outline-none focus:ring-2 ring-emerald-500 font-bold text-black" value="${currentMeetingId}" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
@@ -268,7 +237,7 @@
                 const newName = document.getElementById('rename-meeting-input').value.trim();
                 if (!newName || newName === currentMeetingId) return true;
                 if (meetingList.includes(newName)) {
-                    window.showMessage("이미 존재하는 이름입니다.");
+                    window.showMessage("이미 존재하는 모임 이름입니다.");
                     return false;
                 }
                 try {
@@ -283,28 +252,27 @@
             setTimeout(() => document.getElementById('rename-meeting-input')?.focus(), 100);
         };
 
-        // --- 연도 관리 ---
         window.addNewYear = () => {
             if (!isAdmin) return;
             const bodyHtml = `<input type="number" id="new-year-input" class="w-full p-4 border rounded-2xl outline-none focus:ring-2 ring-emerald-500 font-bold text-center text-black" placeholder="예: 2026" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
-            window.openModal("연도 추가", bodyHtml, () => {
+            window.openModal("연도 추가", bodyHtml, async () => {
                 const year = document.getElementById('new-year-input').value.trim();
                 if (year.length !== 4) {
-                    window.showMessage("4자리 연도를 입력하세요.");
+                    window.showMessage("올바른 연도를 입력하세요.");
                     return false;
                 }
                 window.ensureYearExists(year);
                 currentYear = year;
-                window.saveToCloud();
+                await window.saveToCloud();
                 renderAll();
                 return true;
             });
             setTimeout(() => document.getElementById('new-year-input')?.focus(), 100);
         };
 
-        // --- 기타 액션 ---
         window.onMeetingChange = (e) => startSync(e.target.value);
         window.changeYear = (v) => { currentYear = v; renderAll(); };
+
         window.addNewMeeting = () => {
             if (!isAdmin) return;
             const bodyHtml = `<input type="text" id="new-meeting-input" class="w-full p-4 border rounded-2xl outline-none focus:ring-2 ring-emerald-500 font-bold text-black" placeholder="새 모임 이름" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
@@ -316,17 +284,6 @@
                 return true;
             });
             setTimeout(() => document.getElementById('new-meeting-input')?.focus(), 100);
-        };
-        
-        window.copyShareLink = () => {
-            const shareUrl = `${window.location.origin}${window.location.pathname}?m=${encodeURIComponent(currentMeetingId)}`;
-            const tempInput = document.createElement('input');
-            document.body.appendChild(tempInput);
-            tempInput.value = shareUrl;
-            tempInput.select();
-            document.execCommand('copy');
-            document.body.removeChild(tempInput);
-            window.showMessage(`모임 공유 링크가 복사되었습니다.`);
         };
 
         // --- 렌더링 엔진 ---
@@ -340,8 +297,8 @@
             if (components.titleYear()) components.titleYear().innerText = `${currentYear}년`;
             const dropdown = components.yearDropdown(); if (!dropdown) return;
             const years = [...(appData.years || [])].sort((a,b)=>b-a);
-            const newYearOptions = years.map(y => `<option value="${y}" ${y === currentYear ? 'selected' : ''}>${y}</option>`).join('');
-            if (dropdown.innerHTML !== newYearOptions) dropdown.innerHTML = newYearOptions;
+            const options = years.map(y => `<option value="${y}" ${y === currentYear ? 'selected' : ''}>${y}</option>`).join('');
+            if (dropdown.innerHTML !== options) dropdown.innerHTML = options;
 
             const base = (appData.financeBase && appData.financeBase[currentYear]) || { carry: 0, monthlyFee: 10000, monthlyInterest: Array(12).fill(0) };
             if (document.activeElement !== components.carryInput()) components.carryInput().value = base.carry || 0;
@@ -364,8 +321,8 @@
             const entries = (appData.ledger && appData.ledger[currentYear]) || [];
             const events = [...new Set(entries.map(e => e.event))].filter(e => e).sort();
             
-            const newFilterHtml = '<option value="all">전체 내역 보기</option>' + events.map(ev => `<option value="${ev}" ${ev === currentFilter ? 'selected' : ''}>${ev}</option>`).join('');
-            if (filterDropdown.innerHTML !== newFilterHtml) filterDropdown.innerHTML = newFilterHtml;
+            const filterOptions = '<option value="all">전체 내역 보기</option>' + events.map(ev => `<option value="${ev}" ${ev === currentFilter ? 'selected' : ''}>${ev}</option>`).join('');
+            if (filterDropdown.innerHTML !== filterOptions) filterDropdown.innerHTML = filterOptions;
 
             const body = components.ledgerBody(); body.innerHTML = '';
             let bal = Number((appData.financeBase && appData.financeBase[currentYear])?.carry || 0);
@@ -414,7 +371,7 @@
             });
         }
 
-        // --- 로직 핸들러 ---
+        // --- 기타 로직 ---
         window.updateMonthlyFee = (v) => { if(!isAdmin) return; appData.financeBase[currentYear].monthlyFee = Number(v) || 0; window.saveToCloud(); };
         window.updateCarryOver = (v) => { if(!isAdmin) return; appData.financeBase[currentYear].carry = Number(v) || 0; window.saveToCloud(); };
         window.updateInterest = (idx, v) => { if(!isAdmin) return; appData.financeBase[currentYear].monthlyInterest[idx] = Number(v) || 0; window.saveToCloud(); };
@@ -427,6 +384,7 @@
         window.deleteLedger = (idx) => { if(!isAdmin) return; appData.ledger[currentYear].splice(idx, 1); window.saveToCloud(); };
         window.formatDateInput = (el) => { el.value = el.value.replace(/[^0-9.]/g, ''); };
         window.switchView = (id) => { document.querySelectorAll('main > div').forEach(d => d.classList.add('hidden')); document.getElementById(`view-${id}`)?.classList.remove('hidden'); document.querySelectorAll('nav button').forEach(b => b.classList.remove('active', 'text-emerald-700', 'border-emerald-700', 'bg-emerald-50')); document.getElementById(`tab-${id}`)?.classList.add('active', 'text-emerald-700', 'border-emerald-700', 'bg-emerald-50'); };
+        
         window.handleAuth = async () => { 
             if (isAdmin) { 
                 window.openModal("로그아웃", "로그아웃 하시겠습니까?", async () => { await signOut(auth); window.location.reload(); return true; }); 
@@ -439,7 +397,7 @@
                 window.openModal("관리자 로그인", bodyHtml, async () => { 
                     const email = document.getElementById('login-email').value; 
                     const pw = document.getElementById('login-pw').value; 
-                    try { await signInWithEmailAndPassword(auth, email, pw); window.showMessage("로그인 성공!"); return true; } 
+                    try { await signInWithEmailAndPassword(auth, email, pw); return true; } 
                     catch (e) { window.showMessage("로그인 실패: 정보를 확인하세요."); return false; } 
                 }); 
                 setTimeout(() => document.getElementById('login-email')?.focus(), 100);
@@ -463,9 +421,9 @@
         main input, .modal input, select { color: #000000 !important; }
         
         /* 제목 및 수정 아이콘 */
-        .admin-active h1 { cursor: pointer; transition: color 0.2s; }
+        .admin-active h1 { cursor: pointer; transition: color 0.2s; border-bottom: none !important; }
         .admin-active h1:hover { color: #10b981; }
-        .edit-icon { font-size: 0.5em; vertical-align: middle; margin-left: 8px; color: #10b981; opacity: 0.7; cursor: pointer; display: none; }
+        .edit-icon { font-size: 0.5em; vertical-align: middle; margin-left: 10px; color: #10b981; opacity: 0.7; cursor: pointer; display: none; }
         .admin-active .edit-icon { display: inline-block; }
     </style>
 </head>
@@ -485,8 +443,8 @@
         </div>
     </div>
 
-    <div class="max-w-6xl mx-auto bg-white shadow-2xl min-h-screen flex flex-col border-x border-gray-200">
-        <!-- 상단 고정 너비 레이아웃 -->
+    <div class="max-w-6xl mx-auto bg-white shadow-2xl min-h-screen flex flex-col border-x border-gray-200 text-black">
+        <!-- 상단 바 -->
         <div class="bg-slate-900 text-white text-[11px] p-2.5 px-5 flex flex-wrap gap-y-2 justify-between items-center shadow-md">
             <div class="flex items-center flex-wrap gap-3">
                 <div class="flex items-center bg-white rounded-full pr-1 w-[220px] shrink-0 shadow-sm overflow-hidden">
@@ -500,7 +458,6 @@
                 <button onclick="window.copyShareLink()" class="bg-slate-700 text-white px-4 py-1.5 rounded-full flex items-center gap-2 shrink-0 shadow-md hover:bg-slate-600 active:scale-95 transition-all"><i class="fa-solid fa-share-nodes text-[10px]"></i><span class="font-black text-[10px]">링크공유</span></button>
             </div>
             <div class="flex gap-2 shrink-0">
-                <button onclick="window.downloadTemplate()" class="bg-slate-700 px-3 py-1.5 rounded-lg font-black admin-only shadow-sm hover:bg-slate-600">양식다운</button>
                 <button id="loginBtn" onclick="window.handleAuth()" class="bg-emerald-600 px-3 py-1.5 rounded-lg font-black min-w-[100px] shadow-lg transition-all active:scale-95 hover:bg-emerald-500">관리자 로그인</button>
             </div>
         </div>
@@ -509,12 +466,12 @@
             <div id="title-container" class="flex justify-between items-end mb-8 relative z-10">
                 <div class="flex items-center">
                     <h1 id="main-title" onclick="window.renameMeeting()" class="text-3xl font-black tracking-tighter">기본모임</h1>
-                    <i class="fa-solid fa-pen-to-square edit-icon" onclick="window.renameMeeting()"></i>
+                    <i class="fa-solid fa-pen edit-icon" onclick="window.renameMeeting()"></i>
                     <span id="title-year" class="text-emerald-500 font-medium text-lg ml-3"></span>
                 </div>
                 <div id="user-info" class="text-[10px] font-black uppercase text-slate-500 text-right tracking-widest">인증 대기 중...</div>
             </div>
-            <div class="grid grid-cols-3 gap-4 relative z-10 mb-4 text-center text-black">
+            <div class="grid grid-cols-3 gap-4 relative z-10 mb-4 text-center">
                 <div class="bg-white/5 p-4 rounded-2xl border border-white/10 backdrop-blur-md">
                     <p class="text-[10px] text-emerald-400 font-black mb-1 opacity-80 uppercase">이월액</p>
                     <input type="number" id="carry-over-input" onchange="window.updateCarryOver(this.value)" class="bg-transparent text-lg font-black w-full outline-none text-center rounded-lg transition-all text-white" placeholder="0">
@@ -533,7 +490,7 @@
         <main class="p-6 flex-1 bg-slate-50/30">
             <div id="view-ledger" class="space-y-4">
                 <div class="flex items-center justify-between">
-                    <select id="event-filter" onchange="window.applyFilter()" class="bg-white border border-slate-200 rounded-full px-4 py-2 text-xs font-bold text-black min-w-[120px] shadow-sm cursor-pointer"></select>
+                    <select id="event-filter" onchange="window.applyFilter()" class="bg-white border border-slate-200 rounded-full px-4 py-2 text-xs font-bold text-black min-w-[120px] shadow-sm cursor-pointer outline-none"></select>
                     <div id="filter-summary"></div>
                 </div>
                 <div class="overflow-x-auto rounded-3xl border border-slate-200 bg-white shadow-xl">
@@ -552,9 +509,9 @@
                     <div class="flex items-center justify-between">
                         <h2 class="text-xl font-black text-slate-800 tracking-tight">회원 명부 및 월납 현황</h2>
                         <div class="admin-only flex gap-2 items-center">
-                            <input type="number" id="base-fee-input" class="w-20 p-2 text-sm font-bold border border-slate-200 rounded-xl" onchange="window.updateMonthlyFee(this.value)">
-                            <input type="text" id="new-mem-name" placeholder="이름" class="w-24 p-2.5 border border-slate-200 rounded-xl text-sm font-bold">
-                            <input type="text" id="new-mem-phone" placeholder="전화번호" class="w-32 p-2.5 border border-slate-200 rounded-xl text-sm font-bold">
+                            <input type="number" id="base-fee-input" class="w-20 p-2 text-sm font-bold border border-slate-200 rounded-xl outline-none" onchange="window.updateMonthlyFee(this.value)">
+                            <input type="text" id="new-mem-name" placeholder="이름" class="w-24 p-2.5 border border-slate-200 rounded-xl text-sm font-bold outline-none">
+                            <input type="text" id="new-mem-phone" placeholder="전화번호" class="w-32 p-2.5 border border-slate-200 rounded-xl text-sm font-bold outline-none">
                             <button onclick="window.addMember()" class="bg-slate-900 text-white px-6 rounded-xl text-sm font-black hover:bg-emerald-700 active:scale-95 transition-all">등록</button>
                         </div>
                     </div>
