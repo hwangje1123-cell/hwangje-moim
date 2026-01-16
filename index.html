@@ -14,7 +14,7 @@
         import { getAuth, signInAnonymously, onAuthStateChanged, signOut, signInWithEmailAndPassword, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot, collection, deleteDoc, query, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // 사용자 제공 Firebase 설정
+        // Firebase 설정
         const firebaseConfig = {
             apiKey: "AIzaSyABPfmRxiNzND5O8KdgP7QtHdQ0Mf74nMc",
             authDomain: "hwangje-moim.firebaseapp.com",
@@ -25,7 +25,6 @@
         };
 
         const appId = "hwangje-moim-finance"; 
-
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
@@ -67,7 +66,8 @@
             eventFilter: () => document.getElementById('event-filter'),
             filterSummary: () => document.getElementById('filter-summary'),
             imageViewer: () => document.getElementById('image-viewer'),
-            viewerImg: () => document.getElementById('viewer-img')
+            viewerImg: () => document.getElementById('viewer-img'),
+            modalConfirmBtn: () => document.getElementById('modal-confirm-btn')
         };
 
         // --- 클라우드 저장 및 동기화 ---
@@ -81,7 +81,14 @@
         window.createNewMeeting = async (name) => {
             if (!currentUser) return;
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', name);
-            const initialData = { years: [new Date().getFullYear().toString()], financeBase: {}, members: [], ledger: {}, eventNames: {}, isInactive: false };
+            const initialData = { 
+                years: [new Date().getFullYear().toString()], 
+                financeBase: {}, 
+                members: [], 
+                ledger: {}, 
+                eventNames: {}, 
+                isInactive: false 
+            };
             await setDoc(docRef, initialData);
         };
 
@@ -107,15 +114,18 @@
             setTimeout(() => toast.classList.add('opacity-0'), 3000);
         };
 
+        // 모달 오픈 로직 강화 (이벤트 리스너 중복 방지)
         window.openModal = (title, bodyHtml, onConfirm) => {
             components.modalTitle().innerText = title;
             components.modalBody().innerHTML = bodyHtml;
             components.modal().classList.remove('hidden');
             components.modal().classList.add('flex');
             
-            const confirmBtn = document.getElementById('modal-confirm-btn');
+            const confirmBtn = components.modalConfirmBtn();
+            // 기존 리스너 제거를 위한 클론 처리
             const newBtn = confirmBtn.cloneNode(true);
             confirmBtn.parentNode.replaceChild(newBtn, confirmBtn);
+            
             newBtn.onclick = async () => { 
                 const result = await onConfirm();
                 if (result !== false) window.closeModal(); 
@@ -127,7 +137,7 @@
             components.modal().classList.remove('flex');
         };
 
-        // --- 인증 ---
+        // --- 인증 및 리스너 시작 ---
         const initAuth = async () => {
             try {
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -136,9 +146,7 @@
                 } else {
                     await signInAnonymously(auth);
                 }
-            } catch (error) { 
-                console.error("Auth Error:", error); 
-            }
+            } catch (error) { console.error("인증 초기화 실패", error); }
         };
 
         onAuthStateChanged(auth, (user) => {
@@ -170,8 +178,7 @@
             }
             
             document.querySelectorAll('.admin-only').forEach(el => {
-                const isFlex = el.classList.contains('flex-only');
-                el.style.display = isAdmin ? (isFlex ? 'flex' : 'block') : 'none';
+                el.style.display = isAdmin ? (el.classList.contains('flex-only') ? 'flex' : 'block') : 'none';
             });
         }
 
@@ -190,10 +197,9 @@
 
                 if (isListDifferent || isSelectionDifferent) {
                     meetingList = newList;
-                    if (meetingList.length === 0 && isAdmin) {
-                        window.createNewMeeting('기본모임');
-                    }
-                    // 현재 드롭다운을 조작 중이지 않을 때만 UI 갱신
+                    if (meetingList.length === 0 && isAdmin) window.createNewMeeting('기본모임');
+                    
+                    // 현재 드롭다운을 열어둔 상태가 아닐 때만 UI 갱신
                     if (document.activeElement !== select) {
                         renderMeetingSelect();
                     }
@@ -204,15 +210,10 @@
         function renderMeetingSelect() {
             const select = components.meetingSelect();
             if (!select) return;
-            
-            // 기존 옵션과 새로 만들 옵션 비교하여 DOM 업데이트 최소화
-            const newOptionsHtml = meetingList.map(m => 
+            const options = meetingList.map(m => 
                 `<option value="${m}" ${m === currentMeetingId ? 'selected' : ''}>${m}</option>`
             ).join('');
-            
-            if (select.innerHTML !== newOptionsHtml) {
-                select.innerHTML = newOptionsHtml;
-            }
+            if (select.innerHTML !== options) select.innerHTML = options;
         }
 
         const startSync = (meetingId) => {
@@ -231,11 +232,7 @@
                     const data = snapshot.data();
                     appData = data;
                     if (!appData.years || appData.years.length === 0) appData.years = [currentYear];
-                    
-                    // 연도 정보 동기화 및 렌더링
-                    if (!appData.years.includes(currentYear)) {
-                        currentYear = appData.years[0];
-                    }
+                    if (!appData.years.includes(currentYear)) currentYear = appData.years[0];
                     
                     renderAll();
                     if (focusTargetId) {
@@ -249,62 +246,62 @@
             });
         };
 
-        // --- 관리 기능 (수정됨) ---
+        // --- 모임 및 연도 관리 ---
         window.renameMeeting = () => {
             if (!isAdmin) return;
-            const bodyHtml = `<input type="text" id="rename-meeting-input" class="w-full p-4 border rounded-2xl outline-none focus:ring-2 ring-emerald-500 font-bold text-black" value="${currentMeetingId}" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
+            const bodyHtml = `<input type="text" id="rename-meeting-input" class="w-full p-4 border rounded-2xl outline-none focus:ring-2 ring-emerald-500 font-bold text-black" value="${currentMeetingId}" onkeydown="if(event.key==='Enter') { event.preventDefault(); document.getElementById('modal-confirm-btn').click(); }">`;
             window.openModal("모임 이름 수정", bodyHtml, async () => {
                 const newName = document.getElementById('rename-meeting-input').value.trim();
                 if (!newName || newName === currentMeetingId) return true;
                 if (meetingList.includes(newName)) {
-                    window.showMessage("이미 존재하는 모임 이름입니다.");
+                    window.showMessage("이미 존재하는 이름입니다.");
                     return false;
                 }
                 try {
-                    const oldId = currentMeetingId;
-                    const oldRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', oldId);
+                    const oldRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', currentMeetingId);
                     const newRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', newName);
                     await setDoc(newRef, appData);
                     await deleteDoc(oldRef);
                     startSync(newName);
+                    window.showMessage("모임 이름이 변경되었습니다.");
                     return true;
                 } catch (e) { return false; }
             });
-            setTimeout(() => document.getElementById('rename-meeting-input')?.focus(), 100);
+            setTimeout(() => document.getElementById('rename-meeting-input')?.focus(), 150);
         };
 
-        window.addNewYear = () => {
+        window.addNewMeeting = async () => {
             if (!isAdmin) return;
-            const bodyHtml = `<input type="number" id="new-year-input" class="w-full p-4 border rounded-2xl outline-none focus:ring-2 ring-emerald-500 font-bold text-center text-black" placeholder="예: 2026" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
-            window.openModal("연도 추가", bodyHtml, async () => {
-                const year = document.getElementById('new-year-input').value.trim();
-                if (year.length !== 4) {
-                    window.showMessage("올바른 연도를 입력하세요.");
-                    return false;
-                }
-                window.ensureYearExists(year);
-                currentYear = year;
-                await window.saveToCloud();
-                renderAll();
-                return true;
-            });
-            setTimeout(() => document.getElementById('new-year-input')?.focus(), 100);
-        };
-
-        window.addNewMeeting = () => {
-            if (!isAdmin) return;
-            const bodyHtml = `<input type="text" id="new-meeting-input" class="w-full p-4 border rounded-2xl outline-none focus:ring-2 ring-emerald-500 font-bold text-black" placeholder="새 모임 이름" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
+            const bodyHtml = `<input type="text" id="new-meeting-input" class="w-full p-4 border rounded-2xl outline-none focus:ring-2 ring-emerald-500 font-bold text-black" placeholder="새 모임 이름" onkeydown="if(event.key==='Enter') { event.preventDefault(); document.getElementById('modal-confirm-btn').click(); }">`;
             window.openModal("새 모임 생성", bodyHtml, async () => {
                 const name = document.getElementById('new-meeting-input').value.trim();
-                if (!name || meetingList.includes(name)) {
-                    window.showMessage("사용할 수 없는 이름이거나 이미 존재합니다.");
+                if (!name) return false;
+                if (meetingList.includes(name)) {
+                    window.showMessage("이미 존재하는 모임입니다.");
                     return false;
                 }
                 await window.createNewMeeting(name);
                 startSync(name);
+                window.showMessage(`${name} 모임이 생성되었습니다.`);
                 return true;
             });
-            setTimeout(() => document.getElementById('new-meeting-input')?.focus(), 100);
+            setTimeout(() => document.getElementById('new-meeting-input')?.focus(), 150);
+        };
+
+        window.addNewYear = () => {
+            if (!isAdmin) return;
+            const bodyHtml = `<input type="number" id="new-year-input" class="w-full p-4 border rounded-2xl outline-none focus:ring-2 ring-emerald-500 font-bold text-center text-black" placeholder="예: 2026" onkeydown="if(event.key==='Enter') { event.preventDefault(); document.getElementById('modal-confirm-btn').click(); }">`;
+            window.openModal("연도 추가", bodyHtml, async () => {
+                const year = document.getElementById('new-year-input').value.trim();
+                if (year.length !== 4) return false;
+                window.ensureYearExists(year);
+                currentYear = year;
+                await window.saveToCloud();
+                renderAll();
+                window.showMessage(`${year}년 데이터가 생성되었습니다.`);
+                return true;
+            });
+            setTimeout(() => document.getElementById('new-year-input')?.focus(), 150);
         };
 
         window.onMeetingChange = (e) => startSync(e.target.value);
@@ -356,7 +353,6 @@
             const currentFilter = filterDropdown.value || 'all';
             const entries = (appData.ledger && appData.ledger[currentYear]) || [];
             const events = [...new Set(entries.map(e => e.event))].filter(e => e).sort();
-            
             const filterOptions = '<option value="all">전체 내역 보기</option>' + events.map(ev => `<option value="${ev}" ${ev === currentFilter ? 'selected' : ''}>${ev}</option>`).join('');
             if (filterDropdown.innerHTML !== filterOptions) filterDropdown.innerHTML = filterOptions;
 
@@ -405,7 +401,6 @@
                 html += `<td class="p-1 border-r border-slate-100 min-w-[150px]"><input value="${m.memoByYear?.[currentYear] || ''}" class="w-full h-8 px-2 outline-none font-medium text-black bg-transparent" onchange="window.updateMemberMemo(${m.id}, this.value)"></td>`;
                 tr.innerHTML = html; mBody.appendChild(tr);
             });
-
             const allYears = [...(appData.years || [])].sort((a,b)=>a-b);
             sHead.innerHTML = `<tr><th class="p-4 sticky left-0 z-20 bg-gray-100 border-r-2 border-slate-300 font-black text-black">성명</th>` + allYears.map(y => `<th class="p-3 border-r border-slate-200 font-black text-slate-500 text-[11px]">${y}년</th>`).join('') + `<th class="p-4 bg-emerald-700 text-white font-black">누적 합계</th></tr>`;
             sBody.innerHTML = '';
@@ -435,6 +430,8 @@
         window.deleteLedger = (idx) => { if(!isAdmin) return; appData.ledger[currentYear].splice(idx, 1); window.saveToCloud(); };
         window.formatDateInput = (el) => { el.value = el.value.replace(/[^0-9.]/g, ''); };
         window.switchView = (id) => { document.querySelectorAll('main > div').forEach(d => d.classList.add('hidden')); document.getElementById(`view-${id}`)?.classList.remove('hidden'); document.querySelectorAll('nav button').forEach(b => b.classList.remove('active', 'text-emerald-700', 'border-emerald-700', 'bg-emerald-50')); document.getElementById(`tab-${id}`)?.classList.add('active', 'text-emerald-700', 'border-emerald-700', 'bg-emerald-50'); };
+        window.openImageViewer = (src) => { components.viewerImg().src = src; components.imageViewer().classList.remove('hidden'); components.imageViewer().classList.add('flex'); };
+        window.closeImageViewer = () => components.imageViewer().classList.add('hidden');
         
         window.handleAuth = async () => { 
             if (isAdmin) { 
@@ -448,10 +445,10 @@
                 window.openModal("관리자 로그인", bodyHtml, async () => { 
                     const email = document.getElementById('login-email').value; 
                     const pw = document.getElementById('login-pw').value; 
-                    try { await signInWithEmailAndPassword(auth, email, pw); return true; } 
+                    try { await signInWithEmailAndPassword(auth, email, pw); window.showMessage("로그인 성공!"); return true; } 
                     catch (e) { window.showMessage("로그인 실패: 정보를 확인하세요."); return false; } 
                 }); 
-                setTimeout(() => document.getElementById('login-email')?.focus(), 100);
+                setTimeout(() => document.getElementById('login-email')?.focus(), 150);
             } 
         };
         
