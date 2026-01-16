@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>황제모임 가계부 관리 시스템</title>
-    <!-- 외부 라이브러리 -->
+    <!-- 외부 라이브러리: Tailwind CSS, FontAwesome, SheetJS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
@@ -14,7 +14,7 @@
         import { getAuth, signInAnonymously, onAuthStateChanged, signOut, signInWithEmailAndPassword, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot, collection, deleteDoc, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Firebase 설정
+        // Firebase 설정 (사용자 프로젝트 정보)
         const firebaseConfig = {
             apiKey: "AIzaSyABPfmRxiNzND5O8KdgP7QtHdQ0Mf74nMc",
             authDomain: "hwangje-moim.firebaseapp.com",
@@ -30,7 +30,7 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        // 상태 관리
+        // 앱 상태 관리 변수
         const urlParams = new URLSearchParams(window.location.search);
         let currentMeetingId = urlParams.get('m') || localStorage.getItem('last_meeting_id') || '기본모임';
         let currentYear = urlParams.get('y'); 
@@ -69,12 +69,19 @@
             viewerImg: () => document.getElementById('viewer-img')
         };
 
-        // --- 유틸리티 ---
+        // --- 유틸리티 및 클라우드 통신 ---
         window.saveToCloud = async () => {
             if (!isAdmin || !currentUser) return;
             if (document.activeElement && document.activeElement.id) focusTargetId = document.activeElement.id;
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', currentMeetingId);
             await setDoc(docRef, appData);
+        };
+
+        window.createNewMeeting = async (name) => {
+            if (!currentUser) return;
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', name);
+            const initialData = { years: [new Date().getFullYear().toString()], financeBase: {}, members: [], ledger: {}, eventNames: {}, isInactive: false };
+            await setDoc(docRef, initialData);
         };
 
         window.ensureYearExists = (year) => {
@@ -110,7 +117,7 @@
             components.modal().classList.remove('flex');
         };
 
-        // --- 인증 및 초기화 ---
+        // --- 인증 로직 ---
         const initAuth = async () => {
             try {
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -137,38 +144,44 @@
         function updateAuthUI() {
             const btn = components.loginBtn();
             const info = components.userInfo();
+            const titleEl = components.mainTitle();
             if (!btn) return;
+            
             if (isAdmin) {
                 btn.innerText = "로그아웃";
                 btn.classList.replace('bg-emerald-600', 'bg-slate-700');
                 if (info) info.innerText = `관리자: ${currentUser.email}`;
+                if (titleEl) titleEl.classList.add('admin-title-active'); // 관리자일 때만 호버 효과
             } else {
                 btn.innerText = "관리자 로그인";
                 btn.classList.replace('bg-slate-700', 'bg-emerald-600');
-                if (info) info.innerText = currentUser ? "조회 전용 모드" : "인증 중...";
+                if (info) info.innerText = currentUser ? "조회 전용 모드" : "인증 대기 중...";
+                if (titleEl) titleEl.classList.remove('admin-title-active');
             }
+            
             document.querySelectorAll('.admin-only').forEach(el => {
-                el.style.display = isAdmin ? (el.classList.contains('flex-only') ? 'flex' : 'block') : 'none';
+                const isFlex = el.classList.contains('flex-only');
+                el.style.display = isAdmin ? (isFlex ? 'flex' : 'block') : 'none';
             });
+            
             document.querySelectorAll('input').forEach(input => {
-                if(input.id !== 'login-email' && input.id !== 'login-pw') input.disabled = !isAdmin;
+                if(input.id !== 'login-email' && input.id !== 'login-pw') {
+                    input.disabled = !isAdmin;
+                }
             });
         }
 
-        // --- 데이터 동기화 (깜빡임 방지 로직 고도화) ---
+        // --- 데이터 동기화 (깜빡임 방지 로직) ---
         const syncMeetingList = () => {
             if (!currentUser) return;
             const meetingsColl = collection(db, 'artifacts', appId, 'public', 'data', 'meetings');
             if (unsubscribeList) unsubscribeList();
             unsubscribeList = onSnapshot(meetingsColl, (snapshot) => {
                 const newList = snapshot.docs.map(doc => doc.id).sort();
-                
-                // [깜빡임 방지] 리스트가 실제로 변했거나 현재 선택된 값이 다를 때만 렌더링
                 const select = components.meetingSelect();
-                const isListDifferent = JSON.stringify(meetingList) !== JSON.stringify(newList);
-                const isSelectionDifferent = select && select.value !== currentMeetingId;
-
-                if (isListDifferent || isSelectionDifferent) {
+                
+                // 리스트나 선택값이 바뀌었을 때만 갱신 (깜빡임 차단)
+                if (JSON.stringify(meetingList) !== JSON.stringify(newList) || (select && select.value !== currentMeetingId)) {
                     meetingList = newList;
                     if (meetingList.length === 0 && isAdmin) window.createNewMeeting('기본모임');
                     renderMeetingSelect();
@@ -179,15 +192,10 @@
         function renderMeetingSelect() {
             const select = components.meetingSelect();
             if (!select) return;
-            
-            // 기존 옵션과 비교하여 변경이 필요한 경우만 innerHTML 수정
             const newOptionsHtml = meetingList.map(m => 
                 `<option value="${m}" ${m === currentMeetingId ? 'selected' : ''}>${m}</option>`
             ).join('');
-
-            if (select.innerHTML !== newOptionsHtml) {
-                select.innerHTML = newOptionsHtml;
-            }
+            if (select.innerHTML !== newOptionsHtml) select.innerHTML = newOptionsHtml;
         }
 
         const startSync = (meetingId) => {
@@ -219,7 +227,46 @@
             });
         };
 
-        // --- 동작 ---
+        // --- 모임 관리 기능 (복구) ---
+        window.addNewMeeting = () => {
+            if (!isAdmin) return;
+            const bodyHtml = `<input type="text" id="new-meeting-input" class="w-full p-4 border rounded-2xl outline-none focus:ring-2 ring-emerald-500 font-bold text-black" placeholder="새 모임 이름 입력" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
+            window.openModal("새 모임 생성", bodyHtml, () => {
+                const name = document.getElementById('new-meeting-input').value.trim();
+                if (!name || meetingList.includes(name)) {
+                    window.showMessage("이미 존재하는 이름이거나 잘못된 이름입니다.");
+                    return false;
+                }
+                window.createNewMeeting(name);
+                startSync(name);
+                return true;
+            });
+            setTimeout(() => document.getElementById('new-meeting-input')?.focus(), 100);
+        };
+
+        window.renameMeeting = () => {
+            if (!isAdmin) return;
+            const bodyHtml = `<input type="text" id="rename-meeting-input" class="w-full p-4 border rounded-2xl outline-none focus:ring-2 ring-emerald-500 font-bold text-black" value="${currentMeetingId}" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
+            window.openModal("모임 이름 수정", bodyHtml, async () => {
+                const newName = document.getElementById('rename-meeting-input').value.trim();
+                if (!newName || newName === currentMeetingId) return true;
+                if (meetingList.includes(newName)) {
+                    window.showMessage("이미 존재하는 이름입니다.");
+                    return false;
+                }
+                try {
+                    const oldRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', currentMeetingId);
+                    const newRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', newName);
+                    await setDoc(newRef, appData);
+                    await deleteDoc(oldRef);
+                    startSync(newName);
+                    return true;
+                } catch (e) { return false; }
+            });
+            setTimeout(() => document.getElementById('rename-meeting-input')?.focus(), 100);
+        };
+
+        // --- 네비게이션 및 액션 ---
         window.onMeetingChange = (e) => startSync(e.target.value);
         window.changeYear = (v) => { currentYear = v; renderAll(); };
         
@@ -235,7 +282,7 @@
             window.showMessage(`모임 전체 공유 링크가 복사되었습니다.`);
         };
 
-        // --- 렌더링 엔진 ---
+        // --- 데이터 입력 및 렌더링 ---
         function renderAll() {
             renderHeader();
             renderLedger();
@@ -294,11 +341,10 @@
                     <td class="p-3 text-right font-black text-black bg-black/5 border-r border-slate-200">${bal.toLocaleString()}</td>
                     <td class="p-3 border-r border-slate-100 text-center">${r.image ? `<i class="fa-solid fa-image text-emerald-500 cursor-pointer" onclick="window.openImageViewer('${r.image}')"></i>` : '-'}</td>
                     <td class="p-0 border-r border-slate-100"><input value="${r.note || ''}" class="w-full h-11 px-3 text-center italic text-black outline-none bg-transparent" onchange="window.updateLedgerItem(${idx}, 'note', this.value)"></td>
-                    <td class="p-3 w-10 text-center">${isAdmin ? `<button onclick="window.deleteLedger(${idx})" class="text-slate-300 hover:text-red-500"><i class="fa-solid fa-trash-can"></i></button>` : ''}</td>
+                    <td class="p-3 w-10 text-center">${isAdmin ? `<button onclick="window.deleteLedger(${idx})" class="text-slate-300 hover:text-red-500 transition-colors"><i class="fa-solid fa-trash-can"></i></button>` : ''}</td>
                 `;
                 body.appendChild(tr);
             });
-            components.filterSummary().innerHTML = currentFilter !== 'all' ? `<div class="bg-emerald-50 px-4 py-2 rounded-xl text-[11px] font-bold text-emerald-800">현재 잔액: ${bal.toLocaleString()}원</div>` : '';
         }
 
         function renderIntegratedMemberSettle() {
@@ -318,7 +364,7 @@
             (appData.members || []).forEach(m => {
                 const paid = (m.paidByYear?.[currentYear]) || Array(12).fill(false);
                 const tr = document.createElement('tr'); tr.className = `border-b border-slate-100 text-xs bg-white ${m.isInactive?'opacity-40 grayscale line-through pointer-events-none':''}`;
-                let html = `<td class="p-2 sticky left-0 z-10 border-r-2 border-slate-200 bg-inherit min-w-[250px] whitespace-nowrap"><div class="flex items-center gap-2"><span class="font-black text-black text-[15px]">${m.name}</span>${isAdmin ? `<button onclick="window.removeMember(${m.id})" class="text-slate-300 hover:text-red-500"><i class="fa-solid fa-trash-can text-[11px]"></i></button>` : ''}</div></td>`;
+                let html = `<td class="p-2 sticky left-0 z-10 border-r-2 border-slate-200 bg-inherit min-w-[250px] whitespace-nowrap"><div class="flex items-center gap-2"><span class="font-black text-black text-[15px]">${m.name}</span>${isAdmin ? `<button onclick="window.removeMember(${m.id})" class="text-slate-300 hover:text-red-500"><i class="fa-solid ${m.isInactive ? 'fa-rotate-left' : 'fa-trash-can'} text-[11px]"></i></button>` : ''}</div></td>`;
                 paid.forEach((p, i) => { html += `<td class="p-1 border-r border-slate-100 text-center"><div onclick="window.toggleMemberPaid(${m.id}, ${i})" class="w-8 h-8 mx-auto flex items-center justify-center rounded-lg cursor-pointer ${p ? 'bg-emerald-600 text-white' : 'border border-slate-200'}"><i class="fa-solid fa-check text-xs"></i></div></td>`; });
                 html += `<td class="p-1 border-r border-slate-100 min-w-[150px]"><input value="${m.memoByYear?.[currentYear] || ''}" class="w-full h-8 px-2 outline-none font-medium text-black bg-transparent" onchange="window.updateMemberMemo(${m.id}, this.value)"></td>`;
                 tr.innerHTML = html; mBody.appendChild(tr);
@@ -356,27 +402,28 @@
         window.openImageViewer = (src) => { components.viewerImg().src = src; components.imageViewer().classList.remove('hidden'); components.imageViewer().classList.add('flex'); };
         window.closeImageViewer = () => components.imageViewer().classList.add('hidden');
         
-        // [로그인 엔터 키 지원] 엔터 입력 시 확인 버튼 클릭 트리거
         window.handleAuth = async () => { 
             if (isAdmin) { 
                 window.openModal("로그아웃", "로그아웃 하시겠습니까?", async () => { await signOut(auth); window.location.reload(); return true; }); 
             } else { 
                 const bodyHtml = `
                     <div class="space-y-4">
-                        <input type="email" id="login-email" class="w-full p-3 border rounded-xl text-black" placeholder="이메일" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">
-                        <input type="password" id="login-pw" class="w-full p-3 border rounded-xl text-black" placeholder="비밀번호" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">
+                        <input type="email" id="login-email" class="w-full p-4 border rounded-2xl text-black outline-none focus:ring-2 ring-emerald-500" placeholder="관리자 이메일" onkeydown="if(event.key==='Enter') document.getElementById('login-pw').focus()">
+                        <input type="password" id="login-pw" class="w-full p-4 border rounded-2xl text-black outline-none focus:ring-2 ring-emerald-500" placeholder="비밀번호" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">
                     </div>`; 
                 window.openModal("관리자 로그인", bodyHtml, async () => { 
                     const email = document.getElementById('login-email').value; 
                     const pw = document.getElementById('login-pw').value; 
                     try { 
                         await signInWithEmailAndPassword(auth, email, pw); 
+                        window.showMessage("로그인 성공!");
                         return true; 
                     } catch (e) { 
-                        window.showMessage("로그인 실패"); 
+                        window.showMessage("로그인 실패: 이메일 또는 비밀번호를 확인하세요."); 
                         return false; 
                     } 
                 }); 
+                setTimeout(() => document.getElementById('login-email')?.focus(), 100);
             } 
         };
         
@@ -395,8 +442,10 @@
         #carry-over-input { color: white !important; }
         #carry-over-input:focus { color: black !important; background-color: white !important; }
         main input, .modal input, select { color: #000000 !important; }
-        /* 레이아웃 고정 */
-        .top-bar-item { transition: none !important; }
+        /* 관리자일 때 제목 스타일 */
+        .admin-title-active { cursor: pointer; }
+        .admin-title-active:hover { color: #10b981; }
+        .admin-title-active::after { content: ' \f044'; font-family: 'Font Awesome 6 Free'; font-weight: 900; font-size: 0.4em; vertical-align: middle; opacity: 0.5; }
     </style>
 </head>
 <body class="min-h-screen">
@@ -419,30 +468,30 @@
         <!-- 상단 고정 너비 레이아웃 -->
         <div class="bg-slate-900 text-white text-[11px] p-2.5 px-5 flex flex-wrap gap-y-2 justify-between items-center shadow-md">
             <div class="flex items-center flex-wrap gap-3">
-                <div class="flex items-center bg-white rounded-full pr-1 w-[200px] shrink-0 top-bar-item shadow-sm">
+                <div class="flex items-center bg-white rounded-full pr-1 w-[220px] shrink-0 shadow-sm">
                     <div class="flex items-center gap-1.5 px-3 py-1.5 overflow-hidden w-full"><i class="fa-solid fa-users text-emerald-600"></i><span class="font-black text-slate-400 shrink-0">모임</span><select id="meeting-select" onchange="window.onMeetingChange(event)" class="bg-transparent text-black font-black outline-none cursor-pointer w-full truncate"></select></div>
-                    <button onclick="window.addNewMeeting()" class="bg-emerald-600 w-7 h-7 shrink-0 rounded-full flex items-center justify-center admin-only"><i class="fa-solid fa-plus text-[10px]"></i></button>
+                    <button onclick="window.addNewMeeting()" class="bg-emerald-600 w-7 h-7 shrink-0 rounded-full flex items-center justify-center admin-only hover:bg-emerald-500 transition-colors"><i class="fa-solid fa-plus text-[10px]"></i></button>
                 </div>
-                <div class="flex items-center bg-white rounded-full pr-1 w-[160px] shrink-0 top-bar-item shadow-sm">
+                <div class="flex items-center bg-white rounded-full pr-1 w-[160px] shrink-0 shadow-sm">
                     <div class="flex items-center gap-1.5 px-3 py-1.5 w-full"><i class="fa-solid fa-calendar-days text-emerald-600"></i><span class="font-black text-slate-400 shrink-0">연도</span><select id="year-dropdown" onchange="window.changeYear(this.value)" class="bg-transparent text-black font-black outline-none cursor-pointer w-full"></select></div>
-                    <button onclick="window.addNewYear()" class="bg-emerald-600 w-7 h-7 shrink-0 rounded-full flex items-center justify-center admin-only"><i class="fa-solid fa-plus text-[10px]"></i></button>
+                    <button onclick="window.addNewYear()" class="bg-emerald-600 w-7 h-7 shrink-0 rounded-full flex items-center justify-center admin-only hover:bg-emerald-500 transition-colors"><i class="fa-solid fa-plus text-[10px]"></i></button>
                 </div>
-                <button onclick="window.copyShareLink()" class="bg-slate-700 text-white px-3 py-1.5 rounded-full flex items-center gap-2 shrink-0 shadow-md hover:bg-slate-600 active:scale-95 transition-all"><i class="fa-solid fa-share-nodes text-[10px]"></i><span class="font-black text-[10px]">링크공유</span></button>
+                <button onclick="window.copyShareLink()" class="bg-slate-700 text-white px-4 py-1.5 rounded-full flex items-center gap-2 shrink-0 shadow-md hover:bg-slate-600 active:scale-95 transition-all"><i class="fa-solid fa-share-nodes text-[10px]"></i><span class="font-black text-[10px]">링크공유</span></button>
             </div>
             <div class="flex gap-2 shrink-0">
-                <button onclick="window.downloadTemplate()" class="bg-slate-700 px-3 py-1.5 rounded-lg font-black admin-only shadow-sm">양식다운</button>
-                <button onclick="window.triggerUpload()" class="bg-slate-700 px-3 py-1.5 rounded-lg font-black admin-only shadow-sm">업로드</button>
-                <button id="loginBtn" onclick="window.handleAuth()" class="bg-emerald-600 px-3 py-1.5 rounded-lg font-black min-w-[100px] shadow-lg transition-all active:scale-95">관리자 로그인</button>
+                <button onclick="window.downloadTemplate()" class="bg-slate-700 px-3 py-1.5 rounded-lg font-black admin-only shadow-sm hover:bg-slate-600">양식다운</button>
+                <button onclick="window.triggerUpload()" class="bg-slate-700 px-3 py-1.5 rounded-lg font-black admin-only shadow-sm hover:bg-slate-600">업로드</button>
+                <button id="loginBtn" onclick="window.handleAuth()" class="bg-emerald-600 px-3 py-1.5 rounded-lg font-black min-w-[100px] shadow-lg transition-all active:scale-95 hover:bg-emerald-500">관리자 로그인</button>
             </div>
         </div>
 
         <header class="bg-gradient-to-br from-emerald-900 to-slate-900 text-white p-8 relative overflow-hidden">
             <div class="flex justify-between items-end mb-8 relative z-10">
                 <div>
-                    <h1 id="main-title" onclick="window.renameMeeting()" class="text-3xl font-black tracking-tighter cursor-pointer hover:text-emerald-400 transition-colors">황제모임 가계부</h1>
+                    <h1 id="main-title" onclick="window.renameMeeting()" class="text-3xl font-black tracking-tighter transition-colors">기본모임</h1>
                     <span id="title-year" class="text-emerald-500 font-medium text-lg"></span>
                 </div>
-                <div id="user-info" class="text-[10px] font-black uppercase text-slate-500 text-right tracking-widest"></div>
+                <div id="user-info" class="text-[10px] font-black uppercase text-slate-500 text-right tracking-widest">인증 대기 중...</div>
             </div>
             <div class="grid grid-cols-3 gap-4 relative z-10 mb-4 text-center">
                 <div class="bg-white/5 p-4 rounded-2xl border border-white/10 backdrop-blur-md">
