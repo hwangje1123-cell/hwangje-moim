@@ -36,10 +36,9 @@
         
         let appData = { years: [currentYear], financeBase: {}, members: [], ledger: {}, eventNames: {} };
         let isAdmin = false;
-        let currentUser = null;
-        let unsubscribeData = null;
-        let unsubscribeList = null;
         let meetingList = [];
+        let unsubscribeData = null; 
+        let unsubscribeList = null;
 
         const components = {
             meetingSelect: () => document.getElementById('meeting-select'),
@@ -61,12 +60,14 @@
             modalTitle: () => document.getElementById('modal-title'),
             modalBody: () => document.getElementById('modal-body'),
             modalConfirmBtn: () => document.getElementById('modal-confirm-btn'),
-            toast: () => document.getElementById('toast-message')
+            toast: () => document.getElementById('toast-message'),
+            imageViewer: () => document.getElementById('image-viewer'),
+            viewerImg: () => document.getElementById('viewer-img')
         };
 
-        // --- 유틸리티: 깜빡임 방지 업데이트 ---
+        // --- 유틸리티: 깜빡임 방지 업데이트 엔진 ---
         const updateHTML = (el, newHtml) => {
-            if (el && el.innerHTML !== newHtml) {
+            if (el && el.innerHTML.trim() !== newHtml.trim()) {
                 el.innerHTML = newHtml;
             }
         };
@@ -79,18 +80,18 @@
             setTimeout(() => toast.style.opacity = "0", 3000);
         };
 
-        // --- 클라우드 저장 로직 (권한 체크 및 경로 고정) ---
+        // --- 클라우드 저장 로직 ---
         window.saveToCloud = async () => {
-            if (!isAdmin || !auth.currentUser) {
-                window.showMessage("관리자 로그인이 필요합니다.");
+            if (!isAdmin || !auth.currentUser || auth.currentUser.isAnonymous) {
+                window.showMessage("저장 권한이 없습니다. 관리자 로그인이 필요합니다.");
                 return;
             }
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', currentMeetingId);
             try {
                 await setDoc(docRef, appData);
             } catch (e) {
-                console.error("Cloud Save Error:", e);
-                window.showMessage("저장 권한이 없습니다. 관리자 로그인을 다시 시도하세요.");
+                console.error("Save Error:", e);
+                window.showMessage("저장 권한이 없습니다.");
             }
         };
 
@@ -114,8 +115,7 @@
         window.ensureYearExists = (year) => {
             if (!Array.isArray(appData.years)) appData.years = [];
             if (!appData.years.includes(year)) {
-                appData.years = [...appData.years, year];
-                appData.years.sort((a, b) => Number(b) - Number(a));
+                appData.years = [...appData.years, year].sort((a, b) => Number(b) - Number(a));
             }
             if (!appData.ledger) appData.ledger = {};
             if (!appData.ledger[year]) appData.ledger[year] = [];
@@ -125,59 +125,7 @@
             }
         };
 
-        // --- 모달 시스템 ---
-        window.openModal = (title, bodyHtml, onConfirm) => {
-            const modal = components.modal();
-            const modalConfirmBtn = components.modalConfirmBtn();
-            
-            components.modalTitle().innerText = title;
-            components.modalBody().innerHTML = bodyHtml;
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
-            
-            const newBtn = modalConfirmBtn.cloneNode(true);
-            modalConfirmBtn.parentNode.replaceChild(newBtn, modalConfirmBtn);
-            
-            newBtn.onclick = async () => { 
-                const res = await onConfirm();
-                if (res !== false) window.closeModal(); 
-            };
-        };
-
-        window.closeModal = () => {
-            const modal = components.modal();
-            modal.classList.remove('flex');
-            modal.classList.add('hidden');
-        };
-
-        // --- 인증 관리 ---
-        const initAuth = async () => {
-            try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    try {
-                        await signInWithCustomToken(auth, __initial_auth_token);
-                    } catch (e) {
-                        await signInAnonymously(auth);
-                    }
-                } else {
-                    await signInAnonymously(auth);
-                }
-            } catch (error) {
-                console.error("Auth Init Error", error);
-                await signInAnonymously(auth);
-            }
-        };
-
-        onAuthStateChanged(auth, (user) => {
-            currentUser = user;
-            isAdmin = !!user && !user.isAnonymous; 
-            updateAuthUI();
-            if (user) {
-                syncMeetingList();
-                startSync(currentMeetingId);
-            }
-        });
-
+        // --- 인증 UI 업데이트 (Hoisting 방지를 위해 선언적 정의) ---
         function updateAuthUI() {
             const btn = components.loginBtn();
             const info = components.userInfo();
@@ -198,18 +146,16 @@
             });
         }
 
-        // --- 동기화 리스너 (깜빡임 방지) ---
+        // --- 실시간 리스너 및 동기화 ---
         const syncMeetingList = () => {
             const meetingsColl = collection(db, 'artifacts', appId, 'public', 'data', 'meetings');
             if (unsubscribeList) unsubscribeList();
             unsubscribeList = onSnapshot(meetingsColl, (snapshot) => {
                 const newList = snapshot.docs.map(doc => doc.id).sort();
                 const select = components.meetingSelect();
-                
                 if (JSON.stringify(meetingList) !== JSON.stringify(newList)) {
                     meetingList = newList;
                     if (meetingList.length === 0 && isAdmin) window.createNewMeeting('황제모임');
-                    
                     const optionsHtml = meetingList.map(m => `<option value="${m}" ${m === currentMeetingId ? 'selected' : ''}>${m}</option>`).join('');
                     updateHTML(select, optionsHtml);
                 } else if (select && select.value !== currentMeetingId) {
@@ -219,16 +165,13 @@
         };
 
         const startSync = (meetingId) => {
-            if (unsubscribeData) unsubscribeData();
             currentMeetingId = meetingId;
             localStorage.setItem('last_meeting_id', meetingId);
-            
             const titleEl = components.mainTitle();
             if (titleEl) titleEl.innerText = meetingId;
-            const footerEl = document.getElementById('footer-meeting-name');
-            if (footerEl) footerEl.innerText = meetingId;
 
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', meetingId);
+            if (unsubscribeData) unsubscribeData();
             unsubscribeData = onSnapshot(docRef, (snapshot) => {
                 if (snapshot.exists()) {
                     appData = snapshot.data();
@@ -242,32 +185,53 @@
             });
         };
 
+        // --- 앱 구동 ---
+        const startApp = async () => {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    try {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } catch (e) { await signInAnonymously(auth); }
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (e) { await signInAnonymously(auth); }
+
+            onAuthStateChanged(auth, (user) => {
+                if (!user) return;
+                isAdmin = !user.isAnonymous;
+                updateAuthUI();
+                syncMeetingList();
+                startSync(currentMeetingId);
+            });
+        };
+
         // --- 기능 함수들 ---
         window.renameMeeting = () => {
             if (!isAdmin) return;
-            const bodyHtml = `<input type="text" id="rename-input" class="w-full p-4 border rounded-2xl text-black font-bold outline-none" value="${currentMeetingId}" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
+            const bodyHtml = `<input type="text" id="rename-input" class="w-full p-4 border rounded-2xl text-black font-bold outline-none shadow-sm" value="${currentMeetingId}" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
             window.openModal("모임 이름 수정", bodyHtml, async () => {
                 const newName = document.getElementById('rename-input').value.trim();
                 if (!newName || newName === currentMeetingId) return true;
                 if (meetingList.includes(newName)) return (window.showMessage("이미 존재하는 이름입니다."), false);
-                
                 try {
-                    const oldRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', currentMeetingId);
+                    const oldId = currentMeetingId;
+                    const oldRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', oldId);
                     const newRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetings', newName);
                     await setDoc(newRef, appData);
                     await deleteDoc(oldRef);
                     currentMeetingId = newName;
                     startSync(newName);
-                    window.showMessage("모임 이름이 수정되었습니다.");
+                    window.showMessage("이름이 수정되었습니다.");
                     return true;
                 } catch (e) { return false; }
             });
-            setTimeout(() => document.getElementById('rename-input')?.focus(), 200);
+            setTimeout(() => document.getElementById('rename-input')?.focus(), 150);
         };
 
         window.addNewMeeting = () => {
             if (!isAdmin) return;
-            const bodyHtml = `<input type="text" id="new-moim-input" class="w-full p-4 border rounded-2xl text-black font-bold outline-none" placeholder="새 모임 이름" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
+            const bodyHtml = `<input type="text" id="new-moim-input" class="w-full p-4 border rounded-2xl text-black font-bold outline-none shadow-sm" placeholder="새 모임 이름" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
             window.openModal("새 모임 생성", bodyHtml, async () => {
                 const name = document.getElementById('new-moim-input').value.trim();
                 if (!name) return false;
@@ -277,12 +241,12 @@
                 startSync(name);
                 return true;
             });
-            setTimeout(() => document.getElementById('new-moim-input')?.focus(), 200);
+            setTimeout(() => document.getElementById('new-moim-input')?.focus(), 150);
         };
 
         window.addNewYear = () => {
             if (!isAdmin) return;
-            const bodyHtml = `<input type="number" id="new-year-input" class="w-full p-4 border rounded-2xl text-black font-bold text-center outline-none" placeholder="2026" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
+            const bodyHtml = `<input type="number" id="new-year-input" class="w-full p-4 border rounded-2xl text-black font-bold text-center outline-none shadow-sm" placeholder="2026" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()">`;
             window.openModal("연도 추가", bodyHtml, async () => {
                 const year = document.getElementById('new-year-input').value.trim();
                 if (year.length !== 4) return (window.showMessage("4자리 연도를 입력하세요."), false);
@@ -290,10 +254,9 @@
                 currentYear = year;
                 await window.saveToCloud();
                 renderAll();
-                window.showMessage(`${year}년 데이터가 추가되었습니다.`);
                 return true;
             });
-            setTimeout(() => document.getElementById('new-year-input')?.focus(), 200);
+            setTimeout(() => document.getElementById('new-year-input')?.focus(), 150);
         };
 
         window.addLedgerRow = () => {
@@ -317,15 +280,8 @@
 
         window.onMeetingChange = (e) => startSync(e.target.value);
         window.changeYear = (v) => { currentYear = v; renderAll(); };
-        
-        window.copyShareLink = () => {
-            const url = `${window.location.origin}${window.location.pathname}?m=${encodeURIComponent(currentMeetingId)}`;
-            const t = document.createElement('input'); document.body.appendChild(t); t.value = url; t.select();
-            document.execCommand('copy'); document.body.removeChild(t);
-            window.showMessage("공유 링크가 복사되었습니다.");
-        };
 
-        // --- 렌더링 엔진 ---
+        // --- 렌더링 시스템 ---
         function renderAll() {
             renderHeader();
             renderLedger();
@@ -333,20 +289,22 @@
         }
 
         function renderHeader() {
-            if (components.titleYear()) components.titleYear().innerText = `${currentYear}년`;
-            const dropdown = components.yearDropdown(); if (!dropdown) return;
-            const years = [...(appData.years || [])].sort((a,b)=>Number(b)-Number(a));
-            const optHtml = years.map(y => `<option value="${y}" ${y === currentYear ? 'selected' : ''}>${y}</option>`).join('');
-            updateHTML(dropdown, optHtml);
-
             const base = (appData.financeBase && appData.financeBase[currentYear]) || { carry: 0, monthlyFee: 10000, monthlyInterest: Array(12).fill(0) };
+            if (components.titleYear()) components.titleYear().innerText = `${currentYear}년`;
             const carryInput = components.carryInput();
             if (document.activeElement !== carryInput) carryInput.value = base.carry || 0;
             
+            const years = [...(appData.years || [])].sort((a,b)=>Number(b)-Number(a));
+            const optHtml = years.map(y => `<option value="${y}" ${y === currentYear ? 'selected' : ''}>${y}</option>`).join('');
+            updateHTML(components.yearDropdown(), optHtml);
+
             const interestSum = (base.monthlyInterest || []).reduce((a, b) => Number(a) + Number(b), 0);
             components.interestDisplay().innerText = interestSum.toLocaleString() + "원";
             let feeSum = 0;
-            (appData.members || []).forEach(m => { if (m.paidByYear && m.paidByYear[currentYear]) feeSum += m.paidByYear[currentYear].filter(p => p).length * Number(base.monthlyFee); });
+            (appData.members || []).forEach(m => { 
+                if (m.paidByYear && m.paidByYear[currentYear]) 
+                    feeSum += m.paidByYear[currentYear].filter(p => p).length * Number(base.monthlyFee || 10000); 
+            });
             components.feeDisplay().innerText = feeSum.toLocaleString() + "원";
             
             let ledBal = 0;
@@ -365,7 +323,6 @@
             const filterHtml = '<option value="all">전체 내역 보기</option>' + events.map(ev => `<option value="${ev}" ${ev === currentFilter ? 'selected' : ''}>${ev}</option>`).join('');
             updateHTML(filterDropdown, filterHtml);
 
-            const body = components.ledgerBody();
             let bodyHtml = '';
             let bal = Number((appData.financeBase[currentYear])?.carry || 0);
             let feeSum = 0;
@@ -376,20 +333,20 @@
                 bal += (r.type === 'income' ? r.amount : -r.amount);
                 if (currentFilter !== 'all' && r.event !== currentFilter) return;
                 bodyHtml += `
-                    <tr class="text-xs border-b bg-white transition-colors hover:bg-slate-50 text-black">
-                        <td class="p-0 border-r-2 border-slate-200 sticky-col bg-inherit"><input value="${r.event}" class="w-full h-11 text-center font-bold outline-none bg-transparent" onchange="window.updateLedgerItem(${idx}, 'event', this.value)" ${!isAdmin?'disabled':''}></td>
-                        <td class="p-0 border-r"><input value="${r.date}" class="w-full h-11 text-center font-mono outline-none bg-transparent" placeholder="YY.MM.DD" oninput="window.formatDateInput(this)" onchange="window.updateLedgerItem(${idx}, 'date', this.value)" ${!isAdmin?'disabled':''}></td>
-                        <td class="p-0 border-r"><input value="${r.desc}" class="w-full h-11 px-4 text-left outline-none bg-transparent" onchange="window.updateLedgerItem(${idx}, 'desc', this.value)" ${!isAdmin?'disabled':''}></td>
-                        <td class="p-0 border-r"><input type="number" value="${r.type==='income'?r.amount:''}" class="w-full h-11 px-3 text-right font-black outline-none bg-transparent" onchange="window.updateLedgerAmount(${idx}, 'income', this.value)" ${!isAdmin?'disabled':''}></td>
-                        <td class="p-0 border-r"><input type="number" value="${r.type==='expense'?r.amount:''}" class="w-full h-11 px-3 text-right font-black outline-none bg-transparent" onchange="window.updateLedgerAmount(${idx}, 'expense', this.value)" ${!isAdmin?'disabled':''}></td>
-                        <td class="p-3 text-right font-black bg-black/5 text-slate-800">${bal.toLocaleString()}</td>
-                        <td class="p-3 border-r text-center">${r.image ? `<i class="fa-solid fa-image text-emerald-500 cursor-pointer" onclick="window.openImageViewer('${r.image}')"></i>` : '-'}</td>
-                        <td class="p-0 border-r"><input value="${r.note || ''}" class="w-full h-11 px-3 text-center italic outline-none bg-transparent" onchange="window.updateLedgerItem(${idx}, 'note', this.value)" ${!isAdmin?'disabled':''}></td>
-                        <td class="p-3 w-10 text-center">${isAdmin ? `<button onclick="window.deleteLedger(${idx})" class="text-slate-300 hover:text-red-500 transition-colors"><i class="fa-solid fa-trash-can"></i></button>` : ''}</td>
+                    <tr class="text-[0.65rem] md:text-xs border-b bg-white transition-colors hover:bg-slate-50 text-black">
+                        <td class="p-0 border-r-2 border-slate-200 sticky-col bg-inherit text-black font-bold h-10"><input value="${r.event}" class="w-full h-full text-center outline-none bg-transparent" onchange="window.updateLedgerItem(${idx}, 'event', this.value)" ${!isAdmin?'disabled':''}></td>
+                        <td class="p-0 border-r h-10 text-black font-mono"><input value="${r.date}" class="w-full h-full text-center outline-none bg-transparent font-mono text-[10px] md:text-xs" onchange="window.updateLedgerItem(${idx}, 'date', this.value)" ${!isAdmin?'disabled':''}></td>
+                        <td class="p-0 border-r h-10 text-black"><input value="${r.desc}" class="w-full h-full px-2 outline-none bg-transparent" onchange="window.updateLedgerItem(${idx}, 'desc', this.value)" ${!isAdmin?'disabled':''}></td>
+                        <td class="p-0 border-r h-10 text-black"><input type="number" value="${r.type==='income'?r.amount:''}" class="w-full h-full px-2 text-right font-black outline-none bg-transparent" onchange="window.updateLedgerAmount(${idx}, 'income', this.value)" ${!isAdmin?'disabled':''}></td>
+                        <td class="p-0 border-r h-10 text-black"><input type="number" value="${r.type==='expense'?r.amount:''}" class="w-full h-full px-2 text-right font-black outline-none bg-transparent" onchange="window.updateLedgerAmount(${idx}, 'expense', this.value)" ${!isAdmin?'disabled':''}></td>
+                        <td class="p-2 text-right font-black bg-black/5 text-slate-800">${bal.toLocaleString()}</td>
+                        <td class="p-2 border-r text-center">${r.image ? `<i class="fa-solid fa-image text-emerald-500 cursor-pointer" onclick="window.openImageViewer('${r.image}')"></i>` : '-'}</td>
+                        <td class="p-0 border-r h-10 text-black"><input value="${r.note || ''}" class="w-full h-full px-2 text-center italic outline-none bg-transparent" onchange="window.updateLedgerItem(${idx}, 'note', this.value)" ${!isAdmin?'disabled':''}></td>
+                        <td class="p-2 w-10 text-center">${isAdmin ? `<button onclick="window.deleteLedger(${idx})" class="text-slate-300 hover:text-red-500 transition-colors"><i class="fa-solid fa-trash-can"></i></button>` : ''}</td>
                     </tr>
                 `;
             });
-            updateHTML(body, bodyHtml);
+            updateHTML(components.ledgerBody(), bodyHtml);
         }
 
         function renderIntegratedMemberSettle() {
@@ -398,46 +355,68 @@
             appData.members.sort((a,b)=>a.name.localeCompare(b.name, 'ko'));
             const base = (appData.financeBase && appData.financeBase[currentYear]) || { monthlyFee: 10000, monthlyInterest: Array(12).fill(0) };
             
-            let mHtml = `<tr class="bg-emerald-50/50 text-[11px]"><td class="p-3 font-black sticky left-0 z-10 border-r-2 border-emerald-200 bg-emerald-50 text-center text-black">월별 이자(+)</td>`;
-            for(let i=0; i<12; i++) { mHtml += `<td class="p-1 border-r border-emerald-100 text-center text-black"><input type="number" value="${base.monthlyInterest ? base.monthlyInterest[i] : 0}" class="w-full text-center bg-transparent outline-none font-bold text-black" onchange="window.updateInterest(${i}, this.value)" ${!isAdmin?'disabled':''}></td>`; }
+            let mHtml = `<tr class="bg-emerald-50/50 text-[9px] md:text-[11px]"><td class="p-2 font-black sticky left-0 z-10 border-r-2 border-emerald-200 bg-emerald-50 text-center text-black">월별 이자(+)</td>`;
+            for(let i=0; i<12; i++) { mHtml += `<td class="p-0 border-r border-emerald-100 text-center text-black"><input type="number" value="${base.monthlyInterest ? base.monthlyInterest[i] : 0}" class="w-full h-9 md:h-10 text-center bg-transparent outline-none font-bold text-black" onchange="window.updateInterest(${i}, this.value)" ${!isAdmin?'disabled':''}></td>`; }
             mHtml += `<td class="bg-emerald-50/20 border-l border-emerald-100"></td></tr>`;
 
             (appData.members || []).forEach(m => {
                 const paid = (m.paidByYear && m.paidByYear[currentYear]) || Array(12).fill(false);
-                mHtml += `<tr class="border-b text-xs bg-white ${m.isInactive?'opacity-40 grayscale line-through pointer-events-none':''}">`;
-                mHtml += `<td class="p-2 sticky left-0 z-10 border-r-2 border-slate-200 bg-inherit min-w-[250px] whitespace-nowrap text-black font-bold text-black"><div class="flex items-center gap-2"><span>${m.name}</span>${isAdmin ? `<button onclick="window.removeMember(${m.id})" class="text-slate-300 hover:text-red-500"><i class="fa-solid ${m.isInactive ? 'fa-rotate-left' : 'fa-trash-can'} text-[11px]"></i></button>` : ''}</div></td>`;
-                paid.forEach((p, i) => { mHtml += `<td class="p-1 border-r text-center"><div onclick="window.toggleMemberPaid(${m.id}, ${i})" class="w-8 h-8 mx-auto flex items-center justify-center rounded-lg cursor-pointer ${p ? 'bg-emerald-600 text-white shadow-sm' : 'border border-slate-200 hover:border-emerald-300'}"><i class="fa-solid fa-check text-[10px]"></i></div></td>`; });
-                mHtml += `<td class="p-1 border-r min-w-[150px] text-black"><input value="${(m.memoByYear && m.memoByYear[currentYear]) || ''}" class="w-full h-8 px-2 outline-none font-medium bg-transparent text-black" onchange="window.updateMemberMemo(${m.id}, this.value)" ${!isAdmin?'disabled':''}></td></tr>`;
+                mHtml += `<tr class="border-b text-[0.65rem] md:text-xs bg-white ${m.isInactive?'opacity-40 grayscale line-through pointer-events-none':''}">`;
+                mHtml += `<td class="p-2 sticky left-0 z-10 border-r-2 border-slate-200 bg-inherit min-w-[100px] md:min-w-[150px] whitespace-nowrap text-black font-bold h-9 md:h-10"><div class="flex items-center gap-2"><span>${m.name}</span>${isAdmin ? `<button onclick="window.removeMember(${m.id})" class="text-slate-300 hover:text-red-500"><i class="fa-solid ${m.isInactive ? 'fa-rotate-left' : 'fa-trash-can'} text-[10px]"></i></button>` : ''}</div></td>`;
+                paid.forEach((p, i) => { mHtml += `<td class="p-0 border-r text-center"><div onclick="window.toggleMemberPaid(${m.id}, ${i})" class="w-5 h-5 md:w-8 md:h-8 mx-auto flex items-center justify-center rounded-lg cursor-pointer ${p ? 'bg-emerald-600 text-white shadow-sm' : 'border border-slate-200 hover:border-emerald-300'}"><i class="fa-solid fa-check text-[8px] md:text-[10px]"></i></div></td>`; });
+                mHtml += `<td class="p-0 border-r min-w-[80px] md:min-w-[120px] h-9 md:h-10 text-black font-medium"><input value="${(m.memoByYear && m.memoByYear[currentYear]) || ''}" class="w-full h-full px-2 outline-none bg-transparent text-black" onchange="window.updateMemberMemo(${m.id}, this.value)" ${!isAdmin?'disabled':''}></td></tr>`;
             });
             updateHTML(mBody, mHtml);
 
             const allYears = [...(appData.years || [])].sort((a,b)=>Number(a)-Number(b));
-            let sHeadHtml = `<tr><th class="p-4 sticky left-0 z-20 bg-gray-100 border-r-2 border-slate-300 font-black text-black text-xs text-center">성명</th>` + allYears.map(y => `<th class="p-3 border-r font-black text-slate-500 text-[11px]">${y}년</th>`).join('') + `<th class="p-4 bg-emerald-700 text-white font-black text-xs">누적 합계</th></tr>`;
+            let sHeadHtml = `<tr><th class="p-2 md:p-4 sticky left-0 z-20 bg-gray-100 border-r-2 border-slate-300 font-black text-black text-[10px] md:text-xs text-center">성명</th>` + allYears.map(y => `<th class="p-1 md:p-3 border-r font-black text-slate-500 text-[10px] md:text-[11px]">${y}년</th>`).join('') + `<th class="p-2 md:p-4 bg-emerald-700 text-white font-black text-[10px] md:text-xs">누적 합계</th></tr>`;
             updateHTML(sHead, sHeadHtml);
 
             let sBodyHtml = '';
             (appData.members || []).forEach(m => {
                 let total = 0;
-                sBodyHtml += `<tr class="border-b hover:bg-slate-50 transition-colors text-black text-center text-black font-bold">`;
-                sBodyHtml += `<td class="p-4 sticky left-0 z-10 font-bold border-r-2 bg-white text-black font-bold">${m.name}</td>`;
+                sBodyHtml += `<tr class="border-b hover:bg-slate-50 transition-colors text-black text-center font-bold">`;
+                sBodyHtml += `<td class="p-2 md:p-4 sticky left-0 z-10 font-bold border-r-2 bg-white text-black text-[10px] md:text-xs">${m.name}</td>`;
                 allYears.forEach(y => {
                     const fee = (appData.financeBase && appData.financeBase[y] && appData.financeBase[y].monthlyFee) || 10000; 
                     const amt = (m.paidByYear && m.paidByYear[y] ? m.paidByYear[y].filter(p => p).length : 0) * fee; total += amt;
-                    sBodyHtml += `<td class="p-3 border-r font-bold text-xs text-slate-700 text-black font-bold">${amt.toLocaleString()}</td>`;
+                    sBodyHtml += `<td class="p-1 md:p-3 border-r font-bold text-[10px] md:text-xs text-slate-700">${amt.toLocaleString()}</td>`;
                 });
-                sBodyHtml += `<td class="p-4 bg-emerald-50 font-black text-emerald-900 text-xs text-black font-bold font-black">${total.toLocaleString()}원</td></tr>`;
+                sBodyHtml += `<td class="p-2 md:p-4 bg-emerald-50 font-black text-emerald-900 text-[10px] md:text-xs">${total.toLocaleString()}원</td></tr>`;
             });
             updateHTML(sBody, sBodyHtml);
         }
 
-        // --- 기타 제어부 ---
+        // --- 기타 제어 함수 ---
         window.updateInterest = (idx, v) => { if(!isAdmin) return; if(!appData.financeBase[currentYear]) appData.financeBase[currentYear] = {}; if(!appData.financeBase[currentYear].monthlyInterest) appData.financeBase[currentYear].monthlyInterest = Array(12).fill(0); appData.financeBase[currentYear].monthlyInterest[idx] = Number(v) || 0; window.saveToCloud(); };
         window.formatDateInput = (el) => { el.value = el.value.replace(/[^0-9.]/g, ''); };
-        window.switchView = (id) => { document.querySelectorAll('main > div').forEach(d => d.classList.add('hidden')); document.getElementById(`view-${id}`)?.classList.remove('hidden'); document.querySelectorAll('nav button').forEach(b => b.classList.remove('active')); document.getElementById(`tab-${id}`)?.classList.add('active'); };
+        window.switchView = (id) => { 
+            document.querySelectorAll('main > div').forEach(d => d.classList.add('hidden')); 
+            document.getElementById(`view-${id}`)?.classList.remove('hidden'); 
+            document.querySelectorAll('nav button').forEach(b => b.classList.remove('active')); 
+            document.getElementById(`tab-${id}`)?.classList.add('active'); 
+        };
         window.openImageViewer = (src) => { components.viewerImg().src = src; document.getElementById('image-viewer').classList.replace('hidden', 'flex'); };
         
-        initAuth();
-        window.onload = () => { switchView('ledger'); };
+        window.handleAuth = async () => { 
+            if (isAdmin) { 
+                window.openModal("로그아웃", "로그아웃 하시겠습니까?", async () => { await signOut(auth); window.location.reload(); return true; }); 
+            } else { 
+                const bodyHtml = `<div class="space-y-4 text-black text-center font-bold"><input type="email" id="login-email" class="w-full p-4 border rounded-2xl outline-none" placeholder="이메일" onkeydown="if(event.key==='Enter') document.getElementById('login-pw').focus()"><input type="password" id="login-pw" class="w-full p-4 border rounded-2xl outline-none" placeholder="비밀번호" onkeydown="if(event.key==='Enter') document.getElementById('modal-confirm-btn').click()"></div>`; 
+                window.openModal("관리자 로그인", bodyHtml, async () => { 
+                    const e = document.getElementById('login-email').value; 
+                    const p = document.getElementById('login-pw').value; 
+                    try { 
+                        await signInWithEmailAndPassword(auth, e, p); 
+                        window.showMessage("로그인 성공!"); 
+                        return true; 
+                    } catch (err) { window.showMessage("로그인 실패: 정보를 확인하세요."); return false; } 
+                }); 
+                setTimeout(() => document.getElementById('login-email')?.focus(), 200);
+            } 
+        };
+        
+        startApp();
     </script>
 
     <style>
@@ -445,126 +424,129 @@
         body { font-family: 'Noto Sans KR', sans-serif; background-color: #f1f5f9; color: #334155; }
         .tab-btn { border-bottom: 4px solid transparent; transition: all 0.2s; font-weight: 700; color: #94a3b8; }
         .tab-btn.active { border-bottom-color: #059669; color: #065f46 !important; }
-        input:focus { background-color: #f0fdf4 !important; border-bottom: 2px solid #10b981 !important; outline: none; }
         .sticky-col { position: sticky; left: 0; z-index: 10; border-right: 2px solid #e2e8f0 !important; }
         .admin-only { display: none; }
         #carry-over-input { color: white !important; transition: all 0.2s; font-weight: 900; }
         #carry-over-input:focus { color: black !important; background-color: white !important; }
-        input::placeholder { color: #94a3b8 !important; }
         .admin-mode h1 { cursor: pointer; }
         .admin-mode h1:hover { color: #10b981; }
         .edit-icon { font-size: 0.5em; margin-left: 10px; color: #10b981; display: none; cursor: pointer; opacity: 0.6; }
         .admin-mode .edit-icon { display: inline-block; }
+        select { color: black !important; -webkit-appearance: none; -moz-appearance: none; appearance: none; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        input[disabled] { color: #334155 !important; cursor: default; }
     </style>
 </head>
-<body class="min-h-screen text-black overflow-x-hidden">
-    <div id="datalist-container"></div>
-    <div id="toast-message" class="fixed top-5 left-1/2 -translate-x-1/2 z-[100] bg-slate-800 text-white px-6 py-3 rounded-full text-sm font-bold shadow-2xl opacity-0 transition-opacity duration-300 pointer-events-none text-center"></div>
+<body class="min-h-screen text-black overflow-x-hidden font-bold">
+    <div id="toast-message" class="fixed top-5 left-1/2 -translate-x-1/2 z-[150] bg-slate-800 text-white px-6 py-3 rounded-full text-sm font-bold shadow-2xl opacity-0 transition-opacity duration-300 pointer-events-none text-center"></div>
 
-    <div id="image-viewer" class="fixed inset-0 bg-black/90 z-[110] hidden items-center justify-center p-4 cursor-pointer" onclick="this.classList.replace('flex','hidden')">
-        <img id="viewer-img" src="" class="max-w-full max-h-full rounded-lg shadow-2xl object-contain text-black">
+    <div id="image-viewer" class="fixed inset-0 bg-black/90 z-[200] hidden items-center justify-center p-4 cursor-pointer" onclick="this.classList.replace('flex','hidden')">
+        <img id="viewer-img" src="" class="max-w-full max-h-full rounded-lg shadow-2xl object-contain">
     </div>
 
-    <div id="custom-modal" class="fixed inset-0 bg-black/60 z-[90] hidden items-center justify-center p-4">
-        <div class="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl text-black">
-            <div class="p-6 text-black text-center"><h3 id="modal-title" class="text-lg font-black mb-4 border-b pb-2 text-black font-bold">알림</h3><div id="modal-body" class="text-black"></div></div>
+    <div id="custom-modal" class="fixed inset-0 bg-black/60 z-[140] hidden items-center justify-center p-4">
+        <div class="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-300">
+            <div class="p-6 text-black text-center font-bold font-black"><h3 id="modal-title" class="text-lg font-black mb-4 border-b pb-2 text-black font-bold">알림</h3><div id="modal-body"></div></div>
             <div class="flex border-t"><button onclick="window.closeModal()" class="flex-1 py-4 text-sm font-bold text-slate-400 hover:bg-slate-50 transition-colors text-black font-bold">취소</button><button id="modal-confirm-btn" class="flex-1 py-4 text-sm font-black text-emerald-600 border-l hover:bg-emerald-50 transition-colors text-emerald-600 font-bold">확인</button></div>
         </div>
     </div>
 
     <div class="max-w-6xl mx-auto bg-white shadow-2xl min-h-screen flex flex-col border-x border-gray-200">
-        <!-- 상단 바 -->
-        <div class="bg-slate-900 text-white text-[11px] p-2.5 px-5 flex flex-wrap gap-y-2 justify-between items-center shadow-md">
-            <div class="flex items-center flex-wrap gap-3">
-                <div class="flex items-center bg-white rounded-full pr-1 w-[220px] shrink-0 shadow-sm overflow-hidden text-black">
-                    <div class="flex items-center gap-1.5 px-3 py-1.5 w-full text-black font-bold"><i class="fa-solid fa-users text-emerald-600"></i><span>모임</span><select id="meeting-select" onchange="window.onMeetingChange(event)" class="bg-transparent text-black outline-none cursor-pointer w-full truncate text-black font-bold"></select></div>
-                    <button onclick="window.addNewMeeting()" class="bg-emerald-600 w-7 h-7 shrink-0 rounded-full flex items-center justify-center admin-only hover:bg-emerald-500 transition-colors shadow"><i class="fa-solid fa-plus text-[10px]"></i></button>
+        <!-- 상단 바 (레이아웃 고정 최적화) -->
+        <div class="bg-slate-900 text-white text-[11px] p-2 px-3 md:px-5 flex flex-nowrap gap-2 justify-between items-center shadow-md h-12 overflow-x-auto no-scrollbar">
+            <div class="flex items-center flex-nowrap gap-2">
+                <div class="flex items-center bg-white rounded-full pr-1 w-[130px] md:w-[220px] shrink-0 shadow-sm overflow-hidden text-black h-8 md:h-9">
+                    <div class="flex items-center gap-1 px-2 md:px-3 py-1 w-full text-black font-bold overflow-hidden"><i class="fa-solid fa-users text-emerald-600 text-[10px] md:text-sm"></i><select id="meeting-select" onchange="window.onMeetingChange(event)" class="bg-transparent text-black outline-none cursor-pointer w-full truncate text-[10px] md:text-xs font-black"></select></div>
+                    <button onclick="window.addNewMeeting()" class="bg-emerald-600 w-6 h-6 md:w-7 md:h-7 shrink-0 rounded-full flex items-center justify-center admin-only hover:bg-emerald-500 transition-colors shadow"><i class="fa-solid fa-plus text-[8px] md:text-[10px]"></i></button>
                 </div>
-                <div class="flex items-center bg-white rounded-full pr-1 w-[160px] shrink-0 shadow-sm overflow-hidden text-black">
-                    <div class="flex items-center gap-1.5 px-3 py-1.5 w-full text-black font-bold"><i class="fa-solid fa-calendar-days text-emerald-600"></i><span>연도</span><select id="year-dropdown" onchange="window.changeYear(this.value)" class="bg-transparent text-black outline-none cursor-pointer w-full text-black font-bold"></select></div>
-                    <button onclick="window.addNewYear()" class="bg-emerald-600 w-7 h-7 shrink-0 rounded-full flex items-center justify-center admin-only hover:bg-emerald-500 transition-colors shadow"><i class="fa-solid fa-plus text-[10px]"></i></button>
+                <div class="flex items-center bg-white rounded-full pr-1 w-[90px] md:w-[150px] shrink-0 shadow-sm overflow-hidden text-black h-8 md:h-9">
+                    <div class="flex items-center gap-1 px-2 md:px-3 py-1 w-full text-black font-bold overflow-hidden"><i class="fa-solid fa-calendar-days text-emerald-600 text-[10px] md:text-sm"></i><select id="year-dropdown" onchange="window.changeYear(this.value)" class="bg-transparent text-black outline-none cursor-pointer w-full text-[10px] md:text-xs font-black"></select></div>
+                    <button onclick="window.addNewYear()" class="bg-emerald-600 w-6 h-6 md:w-7 md:h-7 shrink-0 rounded-full flex items-center justify-center admin-only hover:bg-emerald-500 transition-colors shadow"><i class="fa-solid fa-plus text-[8px] md:text-[10px]"></i></button>
                 </div>
-                <button onclick="window.copyShareLink()" class="bg-slate-700 text-white px-4 py-1.5 rounded-full flex items-center gap-2 shrink-0 shadow-md hover:bg-slate-600 active:scale-95 transition-all font-bold"><i class="fa-solid fa-share-nodes text-[10px]"></i><span>공유</span></button>
+                <button onclick="window.copyShareLink()" class="bg-slate-700 text-white px-2 md:px-4 h-8 md:h-9 rounded-full flex items-center gap-1 shrink-0 shadow-md hover:bg-slate-600 active:scale-95 transition-all font-bold text-[10px] md:text-xs"><i class="fa-solid fa-share-nodes"></i><span class="hidden md:inline">공유</span></button>
             </div>
-            <div class="flex gap-2 shrink-0">
-                <button id="loginBtn" onclick="window.handleAuth()" class="bg-emerald-600 px-3 py-1.5 rounded-lg font-black min-w-[100px] shadow-lg transition-all active:scale-95 hover:bg-emerald-500">관리자 로그인</button>
+            <div class="flex gap-1 md:gap-2 shrink-0">
+                <button id="loginBtn" onclick="window.handleAuth()" class="bg-emerald-600 px-2 md:px-3 h-8 md:h-9 rounded-lg font-black text-[10px] md:text-xs shadow-lg transition-all active:scale-95 hover:bg-emerald-500 whitespace-nowrap">관리자 로그인</button>
             </div>
         </div>
 
-        <header class="bg-gradient-to-br from-emerald-900 to-slate-900 text-white p-8 relative overflow-hidden">
-            <div id="title-container" class="flex justify-between items-end mb-8 relative z-10 text-white">
-                <div class="flex items-center text-white">
-                    <h1 id="main-title" onclick="window.renameMeeting()" class="text-3xl font-black tracking-tighter transition-colors text-white font-black">황제모임</h1>
+        <header class="bg-gradient-to-br from-emerald-900 to-slate-900 text-white p-4 md:p-8 relative overflow-hidden">
+            <div id="title-container" class="flex justify-between items-end mb-4 md:mb-8 relative z-10 text-white">
+                <div class="flex items-center text-white overflow-hidden">
+                    <h1 id="main-title" onclick="window.renameMeeting()" class="text-xl md:text-3xl font-black tracking-tighter transition-colors text-white font-black truncate">황제모임</h1>
                     <i class="fa-solid fa-pen-to-square edit-icon" onclick="window.renameMeeting()"></i>
-                    <span id="title-year" class="text-emerald-400 font-medium text-lg ml-3 font-bold"></span>
+                    <span id="title-year" class="text-emerald-400 font-medium text-sm md:text-lg ml-2 font-black shrink-0"></span>
                 </div>
-                <div id="user-info" class="text-[10px] font-black uppercase text-slate-500 text-right tracking-widest text-white/50"></div>
+                <div id="user-info" class="text-[8px] md:text-[10px] font-black uppercase text-slate-500 text-right tracking-widest text-white/50 whitespace-nowrap">조회 전용 모드</div>
             </div>
-            <div class="grid grid-cols-3 gap-4 relative z-10 mb-4 text-center text-black">
-                <div class="bg-white/5 p-4 rounded-2xl border border-white/10 backdrop-blur-md text-emerald-400">
-                    <p class="text-[10px] text-emerald-400 font-black mb-1 opacity-80 uppercase tracking-widest font-black">이월액</p>
-                    <input type="number" id="carry-over-input" onchange="window.updateCarryOver(this.value)" onkeydown="if(event.key==='Enter') this.blur()" class="bg-transparent text-lg font-black w-full outline-none text-center rounded-lg transition-all text-white font-black" placeholder="0">
+            <div class="grid grid-cols-3 gap-2 md:gap-4 relative z-10 mb-4 text-center">
+                <div class="bg-white/5 p-2 md:p-4 rounded-xl md:rounded-2xl border border-white/10 backdrop-blur-md">
+                    <p class="text-[8px] md:text-[10px] text-emerald-400 font-black mb-1 opacity-80 uppercase tracking-widest font-black">이월액</p>
+                    <input type="number" id="carry-over-input" onchange="window.updateCarryOver(this.value)" onkeydown="if(event.key==='Enter') this.blur()" class="bg-transparent text-sm md:text-lg font-black w-full outline-none text-center text-white font-black" placeholder="0">
                 </div>
-                <div class="bg-white/5 p-4 rounded-2xl border border-white/10 backdrop-blur-md text-emerald-400 font-bold"><p class="text-[10px] text-emerald-400 font-black mb-1 opacity-80 uppercase tracking-widest font-black">회비 합계</p><h3 id="fee-total-display" class="text-lg font-black text-white font-black">0원</h3></div>
-                <div class="bg-white/5 p-4 rounded-2xl border border-white/10 backdrop-blur-md text-emerald-400 font-bold"><p class="text-[10px] text-emerald-400 font-black mb-1 opacity-80 uppercase tracking-widest font-black">이자 합계</p><h3 id="interest-total-display" class="text-lg font-black text-white font-black">0원</h3></div>
+                <div class="bg-white/5 p-2 md:p-4 rounded-xl md:rounded-2xl border border-white/10 backdrop-blur-md font-black"><p class="text-[8px] md:text-[10px] text-emerald-400 font-black mb-1 uppercase tracking-widest font-black">회비 합계</p><h3 id="fee-total-display" class="text-sm md:text-lg font-black text-white font-black">0원</h3></div>
+                <div class="bg-white/5 p-2 md:p-4 rounded-xl md:rounded-2xl border border-white/10 backdrop-blur-md font-black"><p class="text-[8px] md:text-[10px] text-emerald-400 font-black mb-1 uppercase tracking-widest font-black">이자 합계</p><h3 id="interest-total-display" class="text-sm md:text-lg font-black text-white font-black">0원</h3></div>
             </div>
-            <div class="bg-emerald-500 p-5 rounded-2xl shadow-2xl border border-emerald-400/30 relative z-10 text-white"><div class="flex justify-between items-center text-white"><p class="text-[11px] text-emerald-950 font-black italic uppercase tracking-widest font-black">현재 총 잔액</p><h3 id="final-balance" class="text-3xl font-black text-white tracking-tighter font-black">0원</h3></div></div>
+            <div class="bg-emerald-500 p-3 md:p-5 rounded-xl md:rounded-2xl shadow-2xl border border-emerald-400/30 relative z-10 text-white"><div class="flex justify-between items-center text-white"><p class="text-[9px] md:text-[11px] text-emerald-950 font-black italic uppercase tracking-widest font-black">현재 총 잔액</p><h3 id="final-balance" class="text-xl md:text-3xl font-black text-white tracking-tighter font-black">0원</h3></div></div>
         </header>
 
-        <nav class="flex items-center border-b sticky top-0 bg-white/90 backdrop-blur-lg z-20 shadow-sm text-black">
-            <button id="tab-ledger" onclick="window.switchView('ledger')" class="tab-btn flex-1 py-5 text-sm active font-bold">장부 기록</button>
-            <button id="tab-member" onclick="window.switchView('member')" class="tab-btn flex-1 py-5 text-sm font-bold">명부 및 정산</button>
+        <nav class="flex items-center border-b sticky top-0 bg-white/95 backdrop-blur-lg z-20 shadow-sm text-black h-12 md:h-14">
+            <button id="tab-ledger" onclick="window.switchView('ledger')" class="tab-btn flex-1 h-full text-xs md:text-sm active font-black">장부 기록</button>
+            <button id="tab-member" onclick="window.switchView('member')" class="tab-btn flex-1 h-full text-xs md:text-sm font-black">명부 및 정산</button>
         </nav>
 
-        <main class="p-6 flex-1 bg-slate-50/30 text-black">
+        <main class="p-4 md:p-6 flex-1 bg-slate-50/30 text-black">
+            <!-- 가계부 내역 -->
             <div id="view-ledger" class="space-y-4">
-                <div class="flex items-center justify-between text-black">
-                    <select id="event-filter" onchange="window.renderLedger()" class="bg-white border border-slate-200 rounded-full px-4 py-2 text-xs font-bold text-black min-w-[120px] shadow-sm outline-none cursor-pointer text-black font-bold"></select>
-                    <div id="filter-summary"></div>
+                <div class="flex items-center justify-between text-black h-8 md:h-11">
+                    <select id="event-filter" onchange="window.renderLedger()" class="bg-white border border-slate-200 rounded-full px-3 py-1 text-[10px] md:text-xs font-bold text-black min-w-[100px] md:min-w-[120px] shadow-sm outline-none cursor-pointer font-bold"></select>
+                    <div id="filter-summary" class="text-[10px] md:text-xs text-black font-black"></div>
                 </div>
-                <div class="overflow-x-auto rounded-3xl border border-slate-200 bg-white shadow-xl">
-                    <table class="w-full text-center border-collapse text-black font-bold">
+                <div class="overflow-x-auto rounded-xl md:rounded-3xl border border-slate-200 bg-white shadow-xl no-scrollbar">
+                    <table class="w-full text-center border-collapse text-black font-bold min-w-[650px]">
                         <thead class="bg-slate-50 text-slate-400 text-[10px] font-black uppercase border-b border-slate-200">
-                            <tr><th class="p-4 sticky-col bg-slate-50 border-r-2 border-slate-200 text-slate-500 font-black">행사명</th><th class="p-4 border-r border-slate-100 text-slate-500 font-black">날짜</th><th class="p-4 border-r border-slate-100 text-slate-500 font-black">상세내역</th><th class="p-4 border-r border-slate-100 text-slate-500 font-black">입금</th><th class="p-4 border-r border-slate-100 text-slate-500 font-black">지출</th><th class="p-4 bg-black/5 border-r border-slate-200 text-black font-black text-slate-950 font-black text-black">잔액</th><th class="p-4 border-r border-slate-100 text-slate-500 font-black">영수증</th><th class="p-4 border-r border-slate-100 text-slate-500 font-black">비고</th><th class="p-4 admin-only font-black"></th></tr>
+                            <tr><th class="p-3 sticky-col bg-slate-50 border-r-2 border-slate-200 font-black">행사명</th><th class="p-3 border-r border-slate-100 font-black">날짜</th><th class="p-3 border-r border-slate-100 font-black">상세내역</th><th class="p-3 border-r border-slate-100 font-black">입금</th><th class="p-3 border-r border-slate-100 font-black">지출</th><th class="p-3 bg-black/5 border-r border-slate-200 text-slate-900 font-black">잔액</th><th class="p-3 border-r border-slate-100 font-black">영수증</th><th class="p-3 border-r border-slate-100 font-black">비고</th><th class="p-3 admin-only"></th></tr>
                         </thead>
                         <tbody id="ledger-body"></tbody>
                     </table>
                 </div>
-                <button onclick="window.addLedgerRow()" class="w-full py-6 border-2 border-dashed border-slate-200 text-slate-400 font-black rounded-3xl hover:bg-white admin-only flex-only items-center justify-center group shadow-sm font-black"><i class="fa-solid fa-circle-plus mr-2 text-lg group-hover:scale-110 transition-transform"></i>거래 내역 추가</button>
+                <button onclick="window.addLedgerRow()" class="w-full py-4 md:py-6 border-2 border-dashed border-slate-200 text-slate-400 font-black rounded-xl md:rounded-3xl hover:bg-white admin-only flex-only items-center justify-center group shadow-sm font-black font-black"><i class="fa-solid fa-circle-plus mr-2 text-lg group-hover:scale-110 transition-transform"></i>거래 내역 추가</button>
             </div>
             
-            <div id="view-member" class="hidden space-y-10 text-black">
+            <!-- 회원 명부 및 정산 -->
+            <div id="view-member" class="hidden space-y-10">
                 <section class="space-y-4">
-                    <div class="flex items-center justify-between text-black font-bold">
-                        <h2 class="text-xl font-black text-slate-800 tracking-tight text-black font-black">회원 명부 및 월납 현황</h2>
-                        <div class="admin-only flex gap-2 items-center text-black">
-                            <input type="number" id="base-fee-input" class="w-20 p-2 text-sm font-bold border border-slate-200 rounded-xl text-black font-bold" onchange="window.updateMonthlyFee(this.value)">
-                            <input type="text" id="new-mem-name" placeholder="이름" class="w-24 p-2.5 border border-slate-200 rounded-xl text-sm font-bold text-black font-bold">
-                            <input type="text" id="new-mem-phone" placeholder="전화번호" class="w-32 p-2.5 border border-slate-200 rounded-xl text-sm font-bold text-black font-bold" onkeydown="if(event.key==='Enter') window.addMember()">
-                            <button onclick="window.addMember()" class="bg-slate-900 text-white px-6 rounded-xl text-sm font-black hover:bg-emerald-700 active:scale-95 transition-all shadow font-black">등록</button>
+                    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <h2 class="text-lg md:text-xl font-black text-slate-800 tracking-tight font-black">회원 명부 및 월납 현황</h2>
+                        <div class="admin-only flex flex-wrap gap-2 items-center text-black font-black">
+                            <input type="number" id="base-fee-input" class="w-16 md:w-20 p-2 text-xs md:text-sm font-bold border border-slate-200 rounded-lg md:rounded-xl text-black font-bold h-8 md:h-10" onchange="window.updateMonthlyFee(this.value)">
+                            <input type="text" id="new-mem-name" placeholder="이름" class="w-20 p-2 text-xs md:text-sm font-bold border border-slate-200 rounded-lg md:rounded-xl text-black font-bold h-8 md:h-10">
+                            <input type="text" id="new-mem-phone" placeholder="전화번호" class="w-28 md:w-32 p-2 text-xs md:text-sm font-bold border border-slate-200 rounded-lg md:rounded-xl text-black font-bold h-8 md:h-10" onkeydown="if(event.key==='Enter') window.addMember()">
+                            <button onclick="window.addMember()" class="bg-slate-900 text-white px-4 h-8 md:h-10 rounded-lg md:rounded-xl text-xs md:text-sm font-black hover:bg-emerald-700 active:scale-95 transition-all shadow font-black">등록</button>
                         </div>
                     </div>
-                    <div class="overflow-x-auto rounded-3xl border border-slate-200 bg-white shadow-2xl">
-                        <table class="w-full text-center border-collapse text-black">
+                    <div class="overflow-x-auto rounded-xl md:rounded-3xl border border-slate-200 bg-white shadow-2xl no-scrollbar">
+                        <table class="w-full text-center border-collapse text-black min-w-[850px]">
                             <thead class="bg-slate-100 text-[10px] text-slate-500 font-black border-b border-slate-200 font-black">
-                                <tr><th class="p-4 sticky left-0 z-20 bg-slate-100 border-r-2 border-slate-200 min-w-[250px] text-black font-black">회원 정보</th><th class="p-2 border-r border-slate-100 text-black font-black">1</th><th class="p-2 border-r border-slate-100 text-black font-black">2</th><th class="p-2 border-r border-slate-100 text-black font-black">3</th><th class="p-2 border-r border-slate-100 text-black font-black">4</th><th class="p-2 border-r border-slate-100 text-black font-black">5</th><th class="p-2 border-r border-slate-100 text-black font-black">6</th><th class="p-2 border-r border-slate-100 text-black font-black">7</th><th class="p-2 border-r border-slate-100 text-black font-black">8</th><th class="p-2 border-r border-slate-100 text-black font-black">9</th><th class="p-2 border-r border-slate-100 text-black font-black">10</th><th class="p-2 border-r border-slate-100 text-black font-black">11</th><th class="p-2 border-r border-slate-100 text-black font-black">12</th><th class="p-4 min-w-[150px] text-black border-l border-slate-200 font-black">비고</th></tr>
+                                <tr><th class="p-3 sticky left-0 z-20 bg-slate-100 border-r-2 border-slate-200 min-w-[130px] text-black font-black">회원 정보</th><th class="p-1 border-r border-slate-100 text-black font-black">1</th><th class="p-1 border-r border-slate-100 text-black font-black">2</th><th class="p-1 border-r border-slate-100 text-black font-black">3</th><th class="p-1 border-r border-slate-100 text-black font-black">4</th><th class="p-1 border-r border-slate-100 text-black font-black">5</th><th class="p-1 border-r border-slate-100 text-black font-black">6</th><th class="p-1 border-r border-slate-100 text-black font-black">7</th><th class="p-1 border-r border-slate-100 text-black font-black">8</th><th class="p-1 border-r border-slate-100 text-black font-black">9</th><th class="p-1 border-r border-slate-100 text-black font-black">10</th><th class="p-1 border-r border-slate-100 text-black font-black">11</th><th class="p-1 border-r border-slate-100 text-black font-black">12</th><th class="p-3 min-w-[100px] text-black border-l border-slate-200 font-black font-black">비고</th></tr>
                             </thead>
                             <tbody id="member-body"></tbody>
                         </table>
                     </div>
                 </section>
                 <section class="space-y-4">
-                    <h2 class="text-xl font-black text-slate-800 tracking-tight text-black font-black">년도별 회비 정산 요약</h2>
-                    <div class="overflow-x-auto rounded-3xl border border-slate-200 bg-white shadow-2xl text-slate-900 font-black">
-                        <table class="w-full text-center border-collapse text-black font-black">
-                            <thead id="settle-header-row" class="bg-slate-100 font-black text-slate-500 border-b-2 border-slate-200 text-black text-xs font-black"></thead>
-                            <tbody id="settle-body" class="text-black font-black"></tbody>
+                    <h2 class="text-lg md:text-xl font-black text-slate-800 tracking-tight font-black">년도별 회비 정산 요약</h2>
+                    <div class="overflow-x-auto rounded-xl md:rounded-3xl border border-slate-200 bg-white shadow-2xl text-slate-900 no-scrollbar">
+                        <table class="w-full text-center border-collapse text-black font-bold min-w-[600px]">
+                            <thead id="settle-header-row" class="bg-slate-100 font-black text-slate-500 border-b-2 border-slate-200 text-black text-[10px] md:text-xs font-black"></thead>
+                            <tbody id="settle-body" class="text-black font-bold"></tbody>
                         </table>
                     </div>
                 </section>
             </div>
         </main>
-        <footer class="p-8 text-center text-[10px] text-slate-500 border-t bg-slate-50 font-bold uppercase tracking-widest text-black font-black">&copy; 2026 <span id="footer-meeting-name"></span> 황제모임 재정 관리 시스템.</footer>
+        <footer class="p-6 md:p-8 text-center text-[10px] text-slate-500 border-t bg-slate-50 font-bold uppercase tracking-widest text-black font-black">&copy; 2026 <span id="footer-meeting-name"></span> 황제모임 재정 관리 시스템.</footer>
     </div>
 </body>
 </html>
